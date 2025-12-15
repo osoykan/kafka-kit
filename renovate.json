@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "group:allNonMajor",
+    "group:monorepos",
+    "schedule:earlyMondays"
+  ],
+  "branchPrefix": "renovate/",
+  "packageRules": [
+    {
+      "description": "Exclude milestone versions for Kotest",
+      "allowedVersions": "!/M/",
+      "matchPackageNames": [
+        "/io.kotest:kotest.*/"
+      ]
+    },
+    {
+      "description": "Group Kotlin updates together",
+      "matchDepNames": [
+        "/org.jetbrains.kotlin.*/",
+        "/org.jetbrains.kotlinx.*/"
+      ],
+      "groupName": "kotlin"
+    },
+    {
+      "description": "Group Spring updates together",
+      "matchDepNames": [
+        "/.*springframework.*/"
+      ],
+      "groupName": "spring"
+    },
+    {
+      "description": "Group Ktor updates together",
+      "matchDepNames": [
+        "/io.ktor.*/",
+        "/io.ktor:ktor.*/"
+      ],
+      "groupName": "ktor"
+    },
+    {
+      "description": "Group Koin updates together",
+      "matchDepNames": [
+        "/io.insert-koin.*/"
+      ],
+      "groupName": "koin"
+    },
+    {
+      "description": "Group Testcontainers updates together",
+      "matchDepNames": [
+        "/org.testcontainers.*/"
+      ],
+      "groupName": "testcontainers"
+    },
+    {
+      "description": "Group Jackson updates together",
+      "matchDepNames": [
+        "/com.fasterxml.jackson.*/"
+      ],
+      "groupName": "jackson"
+    }
+  ]
+}

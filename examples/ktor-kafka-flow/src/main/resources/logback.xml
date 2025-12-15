@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Kafka Flow logs -->
+    <logger name="io.github.osoykan.kafkaflow" level="DEBUG"/>
+    
+    <!-- Example app logs -->
+    <logger name="io.github.osoykan.kafkaflow.example" level="DEBUG"/>
+    
+    <!-- Spring Kafka logs -->
+    <logger name="org.springframework.kafka" level="WARN"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+
+    <!-- Ktor logs -->
+    <logger name="io.ktor" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
