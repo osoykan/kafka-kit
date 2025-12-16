@@ -1,5 +1,7 @@
 # Kafka Flow
 
+> ⚠️ **Work in Progress**: This library is a proof of concept and is under active development. APIs may change. Not recommended for production use yet.
+
 A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write **lean consumers** that focus purely on business logic. All retry, DLT, and metrics handling is automatic.
 
 ## Features
@@ -244,8 +246,8 @@ Kafka Flow supports two polling backends with the same Flow API:
 
 | Backend | Best For | Virtual Threads |
 |---------|----------|-----------------|
-| **Spring Kafka** (default) | Most use cases, Spring ecosystem | `SimpleAsyncTaskExecutor.setVirtualThreads(true)` |
-| **Reactor Kafka** | Reactive stacks, non-Spring apps | `-Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true` |
+| **Spring Kafka** (default) | Most use cases, Spring ecosystem | ✅ Enabled by default |
+| **Reactor Kafka** | Reactive stacks, non-Spring apps | ✅ Enabled by default |
 
 ### Spring Kafka Poller (Default)
 
@@ -295,33 +297,32 @@ poller.pollWithAck(TopicConfig(name = "orders")).collect { ackable ->
 
 ## Virtual Threads
 
-JDK 21+ Virtual Threads optimize the blocking `consumer.poll()` operation. Configuration differs by poller:
+JDK 21+ Virtual Threads are **enabled by default** for both pollers, optimizing the blocking `consumer.poll()` operation.
 
-### Spring Kafka Virtual Threads
+### Default Behavior (Both Pollers)
 
+Virtual Threads are enabled automatically. No configuration needed.
+
+### Disabling Virtual Threads
+
+**Spring Kafka:**
 ```kotlin
 ListenerConfig(
-    useVirtualThreads = true  // Default: enabled
+    useVirtualThreads = false
 )
 ```
 
-Internally uses `SimpleAsyncTaskExecutor.setVirtualThreads(true)` per container.
-
-### Reactor Kafka Virtual Threads
-
-Set the system property before creating pollers:
-
-```bash
--Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
-```
-
-Or programmatically:
-
+**Reactor Kafka:**
 ```kotlin
-System.setProperty("reactor.schedulers.defaultBoundedElasticOnVirtualThreads", "true")
+ReactorKafkaPoller(receiverOptions, useVirtualThreads = false)
 ```
 
-This makes `Schedulers.boundedElastic()` use Virtual Threads globally.
+### Implementation Details
+
+| Poller | Mechanism |
+|--------|-----------|
+| Spring Kafka | `SimpleAsyncTaskExecutor.setVirtualThreads(true)` per container |
+| Reactor Kafka | Sets `-Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true` globally |
 
 ### Architecture
 

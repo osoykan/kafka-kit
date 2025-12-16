@@ -18,34 +18,59 @@ import kotlin.time.toJavaDuration
 
 private val logger = KotlinLogging.logger {}
 
+private const val VIRTUAL_THREADS_PROPERTY = "reactor.schedulers.defaultBoundedElasticOnVirtualThreads"
+
 /**
  * Reactor Kafka based poller using KafkaReceiver.
  *
  * Features:
  * - Non-blocking reactive polling via Project Reactor
  * - Auto-acknowledgment (`poll`) or manual acknowledgment (`pollWithAck`)
- * - Virtual Threads support via `Schedulers.boundedElastic()` (JDK 21+)
+ * - Virtual Threads enabled by default via `Schedulers.boundedElastic()` (JDK 21+)
  *
- * ## Virtual Threads
+ * ## Virtual Threads (Default: enabled)
  *
- * To enable Virtual Threads, set the system property:
+ * Virtual Threads are enabled by default. This is done by setting:
  * ```
  * -Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
  * ```
  *
- * When enabled, `Schedulers.boundedElastic()` automatically uses Virtual Threads.
+ * To disable, set `useVirtualThreads = false` in the constructor.
  *
  * Uses `.asFlow()` from kotlinx-coroutines-reactive for seamless Flux to Flow conversion.
  * Cancellation of the Flow automatically disposes the underlying Flux subscription.
  *
  * @param receiverOptions Base Reactor Kafka receiver options
+ * @param useVirtualThreads Enable Virtual Threads for Reactor schedulers (default: true)
  * @param dispatcher Coroutine dispatcher for flow processing (default: Dispatchers.IO)
  */
 class ReactorKafkaPoller<K : Any, V : Any>(
   private val receiverOptions: ReceiverOptions<K, V>,
+  useVirtualThreads: Boolean = true,
   private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : KafkaPoller<K, V> {
   private val stopped = AtomicBoolean(false)
+
+  init {
+    if (useVirtualThreads) {
+      enableVirtualThreads()
+    }
+  }
+
+  companion object {
+    private val virtualThreadsEnabled = AtomicBoolean(false)
+
+    /**
+     * Enables Virtual Threads for Reactor's boundedElastic scheduler.
+     * This is called automatically when creating a ReactorKafkaPoller with useVirtualThreads=true.
+     */
+    fun enableVirtualThreads() {
+      if (virtualThreadsEnabled.compareAndSet(false, true)) {
+        System.setProperty(VIRTUAL_THREADS_PROPERTY, "true")
+        logger.info { "ReactorKafkaPoller: Virtual Threads enabled for Reactor schedulers" }
+      }
+    }
+  }
 
   /**
    * Consumes messages with auto-acknowledgment.
