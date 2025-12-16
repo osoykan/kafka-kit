@@ -1,27 +1,21 @@
 package io.github.osoykan.kafkaflow
 
-import io.github.osoykan.kafkaflow.poller.KafkaPoller
-import io.github.osoykan.kafkaflow.poller.PollerType
-import io.github.osoykan.kafkaflow.poller.ReactorKafkaPoller
-import io.github.osoykan.kafkaflow.poller.SpringKafkaPoller
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory
 import org.springframework.kafka.core.DefaultKafkaProducerFactory
 import org.springframework.kafka.core.KafkaTemplate
-import reactor.kafka.receiver.ReceiverOptions
 
 /**
  * Factory configuration for Kafka Flow.
  *
- * This abstraction hides Spring Kafka/Reactor Kafka implementation details.
  * Users only provide property maps and listener configuration.
+ * The factory handles all Spring Kafka setup internally.
  *
  * @property consumerProperties Kafka consumer properties (bootstrap.servers, group.id, etc.)
  * @property producerProperties Kafka producer properties (bootstrap.servers, acks, etc.)
  * @property listenerConfig Listener configuration (concurrency, poll timeout, virtual threads)
- * @property pollerType The underlying poller implementation to use
  * @property metrics Metrics implementation for observability
  * @property topicResolver Resolver for consumer topic configuration
  */
@@ -29,7 +23,6 @@ data class KafkaFlowFactoryConfig<K : Any, V : Any>(
   val consumerProperties: Map<String, Any>,
   val producerProperties: Map<String, Any>,
   val listenerConfig: ListenerConfig = ListenerConfig(),
-  val pollerType: PollerType = PollerType.SPRING_KAFKA,
   val metrics: KafkaFlowMetrics = NoOpMetrics,
   val topicResolver: TopicResolver = TopicResolver()
 )
@@ -37,9 +30,8 @@ data class KafkaFlowFactoryConfig<K : Any, V : Any>(
 /**
  * Factory for creating Kafka Flow components.
  *
- * This factory abstracts away the underlying Kafka client implementation
- * (Spring Kafka vs Reactor Kafka) and provides a unified API for creating
- * consumers, producers, and the consumer engine.
+ * This factory handles all Spring Kafka setup internally and provides
+ * a unified API for creating consumers, producers, and the consumer engine.
  *
  * ## Usage
  *
@@ -74,7 +66,7 @@ class KafkaFlowFactory<K : Any, V : Any> private constructor(
      * Creates a KafkaFlowFactory with the given configuration.
      *
      * @param config Kafka Flow configuration
-     * @param dispatcher Coroutine dispatcher for async operations
+     * @param dispatcher Coroutine dispatcher for flow emission (default: Dispatchers.IO)
      * @return A new KafkaFlowFactory instance
      */
     fun <K : Any, V : Any> create(
@@ -86,41 +78,14 @@ class KafkaFlowFactory<K : Any, V : Any> private constructor(
       val producerFactory = DefaultKafkaProducerFactory<K, V>(config.producerProperties)
       val kafkaTemplate = KafkaTemplate(producerFactory)
 
-      // Create the appropriate poller based on config
-      val supervisorFactory = when (config.pollerType) {
-        PollerType.SPRING_KAFKA -> {
-          val poller = SpringKafkaPoller<K, V>(
-            consumerFactory = consumerFactory,
-            listenerConfig = config.listenerConfig,
-            dispatcher = dispatcher
-          )
-          FlowConsumerSupervisorFactory(
-            poller = poller,
-            kafkaTemplate = kafkaTemplate,
-            topicResolver = config.topicResolver,
-            listenerConfig = config.listenerConfig,
-            metrics = config.metrics,
-            consumerFactory = consumerFactory
-          )
-        }
-
-        PollerType.REACTOR_KAFKA -> {
-          val receiverOptions = ReceiverOptions.create<K, V>(config.consumerProperties)
-          val poller = ReactorKafkaPoller(
-            receiverOptions = receiverOptions,
-            useVirtualThreads = config.listenerConfig.useVirtualThreads,
-            dispatcher = dispatcher
-          )
-          FlowConsumerSupervisorFactory(
-            poller = poller,
-            kafkaTemplate = kafkaTemplate,
-            topicResolver = config.topicResolver,
-            listenerConfig = config.listenerConfig,
-            metrics = config.metrics,
-            consumerFactory = consumerFactory
-          )
-        }
-      }
+      val supervisorFactory = FlowConsumerSupervisorFactory(
+        kafkaTemplate = kafkaTemplate,
+        topicResolver = config.topicResolver,
+        listenerConfig = config.listenerConfig,
+        metrics = config.metrics,
+        consumerFactory = consumerFactory,
+        dispatcher = dispatcher
+      )
 
       return KafkaFlowFactory(config, kafkaTemplate, supervisorFactory)
     }
@@ -159,21 +124,21 @@ class KafkaFlowFactory<K : Any, V : Any> private constructor(
 }
 
 /**
- * Internal supervisor factory that works with any KafkaPoller implementation.
+ * Internal supervisor factory using Spring Kafka.
  */
 internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
-  private val poller: KafkaPoller<K, V>,
   private val kafkaTemplate: KafkaTemplate<K, V>,
   private val topicResolver: TopicResolver,
   private val listenerConfig: ListenerConfig,
   private val metrics: KafkaFlowMetrics,
-  private val consumerFactory: ConsumerFactory<K, V>
+  private val consumerFactory: ConsumerFactory<K, V>,
+  private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ConsumerSupervisorFactory<K, V> {
   override fun createSupervisors(consumers: List<Consumer<K, V>>): List<ConsumerSupervisor> = consumers.map { consumer ->
     val config = topicResolver.resolve(consumer)
 
-    // Create FlowKafkaConsumer with the poller
-    val flowConsumer = FlowKafkaConsumer.withPoller(poller)
+    // Create FlowKafkaConsumer - used for both auto-ack and manual-ack
+    val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, dispatcher = dispatcher)
 
     when (consumer) {
       is ConsumerAutoAck<K, V> -> {
@@ -187,15 +152,10 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
       }
 
       is ConsumerManualAck<K, V> -> {
-        // Manual ack still needs the Spring Kafka consumer factory for now
-        val springFlowConsumer = FlowKafkaConsumer(
-          consumerFactory = consumerFactory,
-          listenerConfig = listenerConfig
-        )
         ConsumerManualAckSupervisor(
           consumer = consumer,
           config = config,
-          flowConsumer = springFlowConsumer,
+          flowConsumer = flowConsumer,
           kafkaTemplate = kafkaTemplate,
           metrics = metrics
         )

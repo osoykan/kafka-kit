@@ -76,14 +76,12 @@ data class ResolvedConsumerConfig(
   /**
    * Effective retry topic name.
    */
-  val retryTopic: String?
-    get() = topic.retryTopic ?: topic.name + retry.retryTopicSuffix
+  val retryTopic: String get() = topic.retryTopic ?: (topic.name + retry.retryTopicSuffix)
 
   /**
    * Effective DLT topic name.
    */
-  val dltTopic: String
-    get() = topic.dltTopic ?: topic.name + retry.dltSuffix
+  val dltTopic: String get() = topic.dltTopic ?: (topic.name + retry.dltSuffix)
 }
 
 /**
@@ -92,7 +90,6 @@ data class ResolvedConsumerConfig(
  */
 class TopicResolver(
   private val topicConfigs: Map<String, TopicConfig> = emptyMap(),
-  private val defaultGroupId: String = "",
   private val defaultRetryPolicy: RetryPolicy = RetryPolicy.DEFAULT
 ) {
   /**

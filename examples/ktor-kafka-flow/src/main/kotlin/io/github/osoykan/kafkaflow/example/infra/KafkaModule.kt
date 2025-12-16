@@ -4,7 +4,7 @@ import io.github.osoykan.kafkaflow.*
 import io.github.osoykan.kafkaflow.example.config.AppConfig
 import io.github.osoykan.kafkaflow.example.consumers.*
 import io.github.osoykan.kafkaflow.example.domain.DomainEvent
-import io.github.osoykan.kafkaflow.poller.PollerType
+import io.github.osoykan.kafkaflow.poller.CommitStrategy
 import io.ktor.server.application.*
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerConfig
@@ -14,7 +14,6 @@ import org.koin.core.module.Module
 import org.koin.dsl.bind
 import org.koin.dsl.module
 import org.koin.ktor.ext.get
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Koin module for Kafka infrastructure.
@@ -26,7 +25,7 @@ fun kafkaModule(config: AppConfig): Module = module {
   // Metrics - use NoOp for example, in production use MicrometerMetrics
   single<KafkaFlowMetrics> { LoggingMetrics() }
 
-  // KafkaFlow factory - abstracts Spring/Reactor Kafka internals
+  // KafkaFlow factory - abstracts Spring Kafka internals
   // Uses String keys and DomainEvent values with Jackson serde
   single {
     KafkaFlowFactory.create<String, DomainEvent>(
@@ -36,14 +35,10 @@ fun kafkaModule(config: AppConfig): Module = module {
         listenerConfig = ListenerConfig(
           concurrency = config.kafka.consumer.concurrency,
           pollTimeout = config.kafka.consumer.pollTimeout,
-          ackMode = AckMode.RECORD,
-          syncCommitTimeout = 1.seconds,
-          useVirtualThreads = config.kafka.useVirtualThreads
+          commitStrategy = CommitStrategy.PerRecord
         ),
-        pollerType = PollerType.SPRING_KAFKA,
         metrics = get(),
         topicResolver = TopicResolver(
-          defaultGroupId = config.kafka.groupId,
           defaultRetryPolicy = RetryPolicy.DEFAULT
         )
       )

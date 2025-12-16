@@ -76,7 +76,7 @@ data class EnrichedErrorContext(
   /**
    * Adds all error context headers to a ProducerRecord.
    */
-  fun addHeaders(record: org.apache.kafka.clients.producer.ProducerRecord<*, *>) {
+  fun addHeaders(record: ProducerRecord<*, *>) {
     record.headers().apply {
       add(RecordHeader(Headers.EXCEPTION_CLASS, exception::class.java.name.toByteArray()))
       add(RecordHeader(Headers.EXCEPTION_MESSAGE, (exception.message ?: "").toByteArray()))

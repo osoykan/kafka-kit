@@ -46,19 +46,15 @@ spotless {
 }
 
 dependencies {
-  // Spring Kafka (default poller)
+  // Spring Kafka
   api(libs.spring.kafka)
 
-  // Reactor Kafka (optional alternative poller)
-  compileOnly(libs.reactor.kafka)
-  compileOnly(libs.kotlinx.coroutines.reactor)
-
   // Kotlin Coroutines
-  api(libs.kotlinx.coroutines.core)
-  api(libs.kotlinx.coroutines.jdk8)
+  implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.kotlinx.coroutines.jdk8)
 
   // Logging
-  api(libs.kotlin.logging)
+  implementation(libs.kotlin.logging)
 
   // Test dependencies
   testImplementation(libs.logback.classic)
@@ -66,8 +62,6 @@ dependencies {
   testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.testcontainers.kafka)
   testImplementation(libs.spring.kafka.test)
-  testImplementation(libs.reactor.kafka)
-  testImplementation(libs.kotlinx.coroutines.reactor)
 }
 
 tasks.test {

@@ -23,7 +23,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver(defaultGroupId = "test-group")
+      val resolver = TopicResolver()
       val config = resolver.resolve(TestOrderConsumer())
 
       config.topic.name shouldBe "test.orders"
@@ -40,7 +40,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver(defaultGroupId = "test-group")
+      val resolver = TopicResolver()
       val config = resolver.resolve(TestPaymentConsumer())
 
       config.topic.name shouldBe "test.payments"

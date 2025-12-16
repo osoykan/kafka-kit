@@ -25,8 +25,8 @@ fun interface ExceptionClassifier {
  * or other issues that won't be fixed by retrying.
  */
 class DefaultExceptionClassifier(
-  private val nonRetryable: Set<Class<out Throwable>> = defaultNonRetryable,
-  private val additionalNonRetryable: Set<Class<out Throwable>> = emptySet()
+  nonRetryable: Set<Class<out Throwable>> = defaultNonRetryable,
+  additionalNonRetryable: Set<Class<out Throwable>> = emptySet()
 ) : ExceptionClassifier {
   private val allNonRetryable = nonRetryable + additionalNonRetryable
 

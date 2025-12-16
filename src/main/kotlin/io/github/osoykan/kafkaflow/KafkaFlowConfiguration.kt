@@ -1,6 +1,6 @@
 package io.github.osoykan.kafkaflow
 
-import org.springframework.kafka.listener.ContainerProperties
+import io.github.osoykan.kafkaflow.poller.CommitStrategy
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -79,24 +79,16 @@ data class ConsumerConfig(
 /**
  * Kafka listener container configuration.
  *
- * @property concurrency Number of concurrent consumer threads
+ * @property concurrency Number of concurrent consumer threads/partitions
  * @property pollTimeout Poll timeout duration
- * @property ackMode Acknowledgment mode
+ * @property commitStrategy Commit strategy for auto-ack consumers (default: PerRecord for predictability)
  * @property idleBetweenPolls Idle time between polls
- * @property syncCommits Whether to use synchronous commits
- * @property syncCommitTimeout Synchronous commit timeout
- * @property useVirtualThreads Enable JDK 21+ virtual threads for Kafka polling (default: true)
- *                              Virtual threads are ideal for the blocking consumer.poll() operation.
- *                              This does NOT affect Kotlin coroutines - they continue using Dispatchers.IO.
  */
 data class ListenerConfig(
   val concurrency: Int = 4,
   val pollTimeout: Duration = 1.seconds,
-  val ackMode: AckMode = AckMode.MANUAL_IMMEDIATE,
-  val idleBetweenPolls: Duration = Duration.ZERO,
-  val syncCommits: Boolean = true,
-  val syncCommitTimeout: Duration = 5.seconds,
-  val useVirtualThreads: Boolean = true
+  val commitStrategy: CommitStrategy = CommitStrategy.PerRecord,
+  val idleBetweenPolls: Duration = Duration.ZERO
 )
 
 /**
@@ -128,57 +120,4 @@ data class TopicConfig(
    * Gets the effective poll timeout, using topic-specific or default.
    */
   fun effectivePollTimeout(default: Duration): Duration = pollTimeout ?: default
-}
-
-/**
- * Acknowledgment mode for message processing.
- */
-enum class AckMode {
-  /**
-   * Commit after each record is processed.
-   */
-  RECORD,
-
-  /**
-   * Commit after all records from poll are processed.
-   */
-  BATCH,
-
-  /**
-   * Commit after listener returns without error.
-   */
-  TIME,
-
-  /**
-   * Commit after specified count of records.
-   */
-  COUNT,
-
-  /**
-   * Commit after count or time, whichever comes first.
-   */
-  COUNT_TIME,
-
-  /**
-   * Commit immediately when acknowledgment is called.
-   */
-  MANUAL_IMMEDIATE,
-
-  /**
-   * Commit when all records have been acknowledged.
-   */
-  MANUAL;
-
-  /**
-   * Converts to Spring Kafka ContainerProperties.AckMode.
-   */
-  fun toSpringAckMode(): ContainerProperties.AckMode = when (this) {
-    RECORD -> ContainerProperties.AckMode.RECORD
-    BATCH -> ContainerProperties.AckMode.BATCH
-    TIME -> ContainerProperties.AckMode.TIME
-    COUNT -> ContainerProperties.AckMode.COUNT
-    COUNT_TIME -> ContainerProperties.AckMode.COUNT_TIME
-    MANUAL_IMMEDIATE -> ContainerProperties.AckMode.MANUAL_IMMEDIATE
-    MANUAL -> ContainerProperties.AckMode.MANUAL
-  }
 }

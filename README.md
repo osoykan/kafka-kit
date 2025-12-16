@@ -8,13 +8,13 @@ A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write
 
 - **Lean Consumer Pattern**: Just implement `suspend fun consume(record)`, no boilerplate
 - **Flow-based API**: Consume Kafka messages as Kotlin Flows with backpressure
-- **Dual Poller Support**: Spring Kafka (default) or Reactor Kafka backends
 - **Coroutine-native**: Fully suspend-based, non-blocking async publishing
-- **Virtual Threads**: JDK 21+ Virtual Threads for Kafka polling (configurable)
+- **Virtual Threads**: JDK 21+ Virtual Threads for Kafka polling (enabled by default)
 - **Two-stage Retry**: In-memory retries, Retry Topic, Dead Letter Topic
 - **Per-consumer Config**: All policies configurable via `@KafkaTopic` annotation
 - **Exception Classification**: Retryable vs NonRetryable, skip retries for validation errors
 - **TTL Support**: Expire messages by retry duration or message age
+- **Backpressure**: Configurable buffer capacity to control message flow
 - **Metrics Interface**: Pluggable observability (`NoOp`, `Logging`, `Micrometer`)
 - **Spring Kafka Powered**: Battle-tested rebalancing, commits, and lifecycle
 - **No Spring Boot Required**: Works with Ktor, http4k, or any framework
@@ -24,10 +24,6 @@ A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write
 ```kotlin
 dependencies {
     implementation("io.github.osoykan:kafka-flow:0.1.0") // to be published
-    
-    // Optional: For Reactor Kafka poller
-    implementation("io.projectreactor.kafka:reactor-kafka:1.3.24")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.10.2")
 }
 ```
 
@@ -135,7 +131,7 @@ val config = KafkaFlowConfig(
     listener = ListenerConfig(
         concurrency = 4,
         pollTimeout = 1.seconds,
-        useVirtualThreads = true  // JDK 21+ Virtual Threads for polling
+        useVirtualThreads = true  // JDK 21+ Virtual Threads (default: true)
     )
 )
 ```
@@ -240,89 +236,27 @@ Prevent stale messages from processing indefinitely:
 
 Expired messages are sent to DLT with expiry reason in headers.
 
-## Polling Backends
+## Backpressure
 
-Kafka Flow supports two polling backends with the same Flow API:
-
-| Backend |   Virtual Threads |
-|---------|----------|
-| **Spring Kafka** (default)  | ✅ Enabled by default |
-| **Reactor Kafka** | ✅ Enabled by default |
-
-### Spring Kafka Poller (Default)
+Control message flow when consumers are slower than producers:
 
 ```kotlin
-// Uses ConcurrentMessageListenerContainer internally
-val consumer = FlowKafkaConsumer(consumerFactory, listenerConfig)
-
-consumer.consume(TopicConfig(name = "orders"))
+// Consume with custom buffer capacity
+consumer.consume(topicConfig, bufferCapacity = 10)
     .collect { record -> process(record) }
 ```
 
-### Reactor Kafka Poller
+**Buffer capacity options:**
+- `Channel.RENDEZVOUS` (0): No buffering, immediate backpressure
+- Small values (1-10): Tight backpressure, lower memory
+- `Channel.BUFFERED` (64): Default, balanced throughput/memory
+- Large values (100+): High throughput, more memory usage
 
-```kotlin
-// Add dependency: io.projectreactor.kafka:reactor-kafka
-// Add dependency: org.jetbrains.kotlinx:kotlinx-coroutines-reactor
-
-val receiverOptions = ReceiverOptions.create<String, String>(
-    mapOf(
-        ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to "localhost:9092",
-        ConsumerConfig.GROUP_ID_CONFIG to "my-group",
-        ConsumerConfig.AUTO_OFFSET_RESET_CONFIG to "earliest",
-        ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java,
-        ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java
-    )
-)
-
-val poller = ReactorKafkaPoller(receiverOptions)
-val consumer = FlowKafkaConsumer.withPoller(poller)
-
-consumer.consume(TopicConfig(name = "orders"))
-    .collect { record -> process(record) }
-```
-
-### Manual Acknowledgment with Reactor Kafka
-
-```kotlin
-poller.pollWithAck(TopicConfig(name = "orders")).collect { ackable ->
-    try {
-        process(ackable.record)
-        ackable.acknowledge()  // Commit offset
-    } catch (e: Exception) {
-        // Don't acknowledge, will be redelivered
-    }
-}
-```
+When the buffer is full, the Kafka listener thread blocks until the consumer catches up, preventing unbounded memory growth.
 
 ## Virtual Threads
 
-JDK 21+ Virtual Threads are **enabled by default** for both pollers, optimizing the blocking `consumer.poll()` operation.
-
-### Default Behavior (Both Pollers)
-
-Virtual Threads are enabled automatically. No configuration needed.
-
-### Disabling Virtual Threads
-
-**Spring Kafka:**
-```kotlin
-ListenerConfig(
-    useVirtualThreads = false
-)
-```
-
-**Reactor Kafka:**
-```kotlin
-ReactorKafkaPoller(receiverOptions, useVirtualThreads = false)
-```
-
-### Implementation Details
-
-| Poller | Mechanism |
-|--------|-----------|
-| Spring Kafka | `SimpleAsyncTaskExecutor.setVirtualThreads(true)` per container |
-| Reactor Kafka | Sets `-Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true` globally |
+JDK 21+ Virtual Threads are **enabled by default** for Kafka polling, optimizing the blocking `consumer.poll()` operation.
 
 ### Architecture
 
@@ -341,6 +275,14 @@ flowchart TB
 
 - **Virtual Threads**: For blocking Kafka polling (cheap, unlimited)
 - **Coroutines**: For message processing (suspendable, composable)
+
+### Disabling Virtual Threads
+
+```kotlin
+ListenerConfig(
+    useVirtualThreads = false
+)
+```
 
 ## Metrics
 
@@ -510,28 +452,33 @@ fun kafkaModule(config: AppConfig) = module {
     // Metrics
     single<KafkaFlowMetrics> { LoggingMetrics() }
     
-    // Kafka infrastructure
-    single { 
-        KafkaFlowFactories.createConsumerFactory(
-            config.kafka.toKafkaFlowConfig(),
-            StringDeserializer(),
-            JsonDeserializer<Any>()
-        )
-    }
-    single { 
-        KafkaFlowFactories.createKafkaTemplate(
-            KafkaFlowFactories.createProducerFactory(
-                config.kafka.toKafkaFlowConfig(),
-                StringSerializer(),
-                JsonSerializer<Any>()
+    // KafkaFlowFactory - handles all Spring Kafka setup internally
+    single {
+        KafkaFlowFactory.create<String, Any>(
+            KafkaFlowFactoryConfig(
+                consumerProperties = mapOf(
+                    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to config.kafka.bootstrapServers,
+                    ConsumerConfig.GROUP_ID_CONFIG to config.kafka.groupId,
+                    ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java,
+                    ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG to JsonDeserializer::class.java
+                ),
+                producerProperties = mapOf(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG to config.kafka.bootstrapServers,
+                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG to StringSerializer::class.java,
+                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG to JsonSerializer::class.java
+                ),
+                metrics = get(),
+                topicResolver = TopicResolver(defaultGroupId = config.kafka.groupId)
             )
         )
     }
     
-    // Consumer engine
-    single { TopicResolver(defaultGroupId = config.kafka.groupId) }
-    single { DefaultConsumerSupervisorFactory(get(), get(), get(), get(), get()) }
-    single { ConsumerEngine(getAll<Consumer<String, Any>>(), get(), get()) }
+    // Consumer engine - discovers all consumers
+    single {
+        get<KafkaFlowFactory<String, Any>>().createConsumerEngine(
+            consumers = getAll<Consumer<String, Any>>()
+        )
+    }
     
     // Consumers - auto-discovered via getAll<Consumer>()
     single { OrderCreatedConsumer(get()) } bind Consumer::class
@@ -652,8 +599,7 @@ RetryPolicy.TIME_LIMITED
 |-------------|---------|-------|
 | Kotlin | 2.0+ | |
 | JDK | 21+ | Required for Virtual Threads |
-| Spring Kafka | 4.0+ | Default poller |
-| Reactor Kafka | 1.3+ | Optional, alternative poller |
+| Spring Kafka | 4.0+ | |
 
 ## Examples
 

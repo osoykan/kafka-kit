@@ -71,7 +71,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   )
 
   override val topics: List<String>
-    get() = listOfNotNull(config.topic.name, config.retryTopic)
+    get() = listOf(config.topic.name, config.retryTopic)
 
   override fun start() {
     if (running) {
@@ -94,10 +94,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   /**
    * Start consuming from the retry topic. Subclasses implement specific flow handling.
    */
-  protected fun startRetryTopicConsumer(): Job? {
-    val retryTopic = config.retryTopic ?: return null
-    return launchRetryConsumer(TopicConfig(name = retryTopic))
-  }
+  protected fun startRetryTopicConsumer(): Job = launchRetryConsumer(TopicConfig(name = config.retryTopic))
 
   /**
    * Launch retry topic consumer. Subclasses override for specific handling.
@@ -258,53 +255,5 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
       ackRecord.acknowledgment.acknowledge()
     }
     // If Failed and not handled, don't acknowledge - message will be redelivered
-  }
-}
-
-/**
- * Default implementation of ConsumerSupervisorFactory.
- */
-class DefaultConsumerSupervisorFactory<K : Any, V : Any>(
-  private val consumerFactory: ConsumerFactory<K, V>,
-  private val kafkaTemplate: KafkaTemplate<K, V>,
-  private val topicResolver: TopicResolver,
-  private val listenerConfig: ListenerConfig = ListenerConfig(),
-  private val metrics: KafkaFlowMetrics = NoOpMetrics
-) : ConsumerSupervisorFactory<K, V> {
-  override fun createSupervisors(consumers: List<Consumer<K, V>>): List<ConsumerSupervisor> = consumers.map { consumer ->
-    val config = topicResolver.resolve(consumer)
-
-    val flowConsumer = FlowKafkaConsumer<K, V>(
-      consumerFactory = consumerFactory,
-      listenerConfig = listenerConfig
-    )
-
-    when (consumer) {
-      is ConsumerAutoAck<K, V> -> {
-        logger.debug { "Creating AutoAck supervisor for: ${consumer.consumerName}" }
-        ConsumerAutoAckSupervisor(
-          consumer = consumer,
-          config = config,
-          flowConsumer = flowConsumer,
-          kafkaTemplate = kafkaTemplate,
-          metrics = metrics
-        )
-      }
-
-      is ConsumerManualAck<K, V> -> {
-        logger.debug { "Creating ManualAck supervisor for: ${consumer.consumerName}" }
-        ConsumerManualAckSupervisor(
-          consumer = consumer,
-          config = config,
-          flowConsumer = flowConsumer,
-          kafkaTemplate = kafkaTemplate,
-          metrics = metrics
-        )
-      }
-
-      else -> {
-        error("Unknown consumer type: ${consumer::class.simpleName}")
-      }
-    }
   }
 }

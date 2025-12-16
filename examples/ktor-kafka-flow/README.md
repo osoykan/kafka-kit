@@ -57,12 +57,7 @@ Control which exceptions trigger retries:
 
 ### 5. Virtual Threads for Kafka Polling
 
-JDK 21+ Virtual Threads are used for `consumer.poll()` by default:
-
-```yaml
-kafka:
-  use-virtual-threads: true
-```
+JDK 21+ Virtual Threads are used for `consumer.poll()` by default. No configuration needed.
 
 ## Project Structure
 
