@@ -42,7 +42,7 @@ class OrderCreatedConsumer(
     private val orderService: OrderService
 ) : ConsumerAutoAck<String, OrderEvent> {
     
-    // That's ALL you write - no retry logic, no error handling!
+    // Retry, DLT, and metrics are handled by the supervisor
     override suspend fun consume(record: ConsumerRecord<String, OrderEvent>) {
         orderService.processOrder(record.value())
     }
