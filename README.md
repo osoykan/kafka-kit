@@ -244,10 +244,10 @@ Expired messages are sent to DLT with expiry reason in headers.
 
 Kafka Flow supports two polling backends with the same Flow API:
 
-| Backend | Best For | Virtual Threads |
-|---------|----------|-----------------|
-| **Spring Kafka** (default) | Most use cases, Spring ecosystem | ✅ Enabled by default |
-| **Reactor Kafka** | Reactive stacks, non-Spring apps | ✅ Enabled by default |
+| Backend |   Virtual Threads |
+|---------|----------|
+| **Spring Kafka** (default)  | ✅ Enabled by default |
+| **Reactor Kafka** | ✅ Enabled by default |
 
 ### Spring Kafka Poller (Default)
 
