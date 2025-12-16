@@ -1,20 +1,20 @@
 # Kafka Flow
 
-A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write **lean consumers** that focus purely on business logic — all retry, DLT, and metrics handling is automatic.
+A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write **lean consumers** that focus purely on business logic. All retry, DLT, and metrics handling is automatic.
 
 ## Features
 
-- **Lean Consumer Pattern** — Just implement `suspend fun consume(record)`, no boilerplate
-- **Flow-based API** — Consume Kafka messages as Kotlin Flows with backpressure
-- **Coroutine-native** — Fully suspend-based, non-blocking async publishing
-- **Virtual Threads** — JDK 21+ Virtual Threads for Kafka polling (configurable)
-- **Two-stage Retry** — In-memory retries → Retry Topic → Dead Letter Topic
-- **Per-consumer Config** — All policies configurable via `@KafkaTopic` annotation
-- **Exception Classification** — Retryable vs NonRetryable, skip retries for validation errors
-- **TTL Support** — Expire messages by retry duration or message age
-- **Metrics Interface** — Pluggable observability (`NoOp`, `Logging`, `Micrometer`)
-- **Spring Kafka Powered** — Battle-tested rebalancing, commits, and lifecycle
-- **No Spring Boot Required** — Works with Ktor, http4k, or any framework
+- **Lean Consumer Pattern**: Just implement `suspend fun consume(record)`, no boilerplate
+- **Flow-based API**: Consume Kafka messages as Kotlin Flows with backpressure
+- **Coroutine-native**: Fully suspend-based, non-blocking async publishing
+- **Virtual Threads**: JDK 21+ Virtual Threads for Kafka polling (configurable)
+- **Two-stage Retry**: In-memory retries, Retry Topic, Dead Letter Topic
+- **Per-consumer Config**: All policies configurable via `@KafkaTopic` annotation
+- **Exception Classification**: Retryable vs NonRetryable, skip retries for validation errors
+- **TTL Support**: Expire messages by retry duration or message age
+- **Metrics Interface**: Pluggable observability (`NoOp`, `Logging`, `Micrometer`)
+- **Spring Kafka Powered**: Battle-tested rebalancing, commits, and lifecycle
+- **No Spring Boot Required**: Works with Ktor, http4k, or any framework
 
 ## Installation
 
@@ -42,7 +42,7 @@ class OrderCreatedConsumer(
     private val orderService: OrderService
 ) : ConsumerAutoAck<String, OrderEvent> {
     
-    // That's ALL you write — no retry logic, no error handling!
+    // That's ALL you write - no retry logic, no error handling!
     override suspend fun consume(record: ConsumerRecord<String, OrderEvent>) {
         orderService.processOrder(record.value())
     }
@@ -189,11 +189,11 @@ flowchart TD
 ```
 
 **Summary:**
-1. **TTL Check** — Expire old messages immediately
-2. **Classification** — Non-retryable exceptions skip to DLT
-3. **In-memory retries** — Fast recovery for transient failures
-4. **Retry topic** — Durable retry for persistent issues
-5. **DLT** — Permanent failure storage
+1. **TTL Check**: Expire old messages immediately
+2. **Classification**: Non-retryable exceptions skip to DLT
+3. **In-memory retries**: Fast recovery for transient failures
+4. **Retry topic**: Durable retry for persistent issues
+5. **DLT**: Permanent failure storage
 
 ## Backoff Strategies
 
@@ -228,8 +228,8 @@ Prevent stale messages from processing indefinitely:
 ```
 
 **Two dimensions:**
-- `maxRetryDuration` — Time since first failure (tracked via `kafka.first.failure.time` header)
-- `maxMessageAge` — Time since original message timestamp
+- `maxRetryDuration`: Time since first failure (tracked via `kafka.first.failure.time` header)
+- `maxMessageAge`: Time since original message timestamp
 
 Expired messages are sent to DLT with expiry reason in headers.
 
@@ -252,14 +252,14 @@ flowchart TB
     end
     
     subgraph spring["Spring Kafka Container (Virtual Threads)"]
-        poll["consumer.poll() — blocking I/O"]
+        poll["consumer.poll() - blocking I/O"]
     end
     
     spring -->|emits records| coroutines
 ```
 
-- **Virtual Threads** — For blocking Kafka polling (cheap, unlimited)
-- **Coroutines** — For message processing (suspendable, composable)
+- **Virtual Threads**: For blocking Kafka polling (cheap, unlimited)
+- **Coroutines**: For message processing (suspendable, composable)
 
 ## Metrics
 
@@ -373,14 +373,14 @@ class OrderDltConsumer(
 ```
 
 **DLT message headers:**
-- `kafka.original.topic` — Original topic name
-- `kafka.exception.class` — Exception class name
-- `kafka.exception.message` — Exception message
-- `kafka.exception.stacktrace` — Full stack trace
-- `kafka.total.retry.count` — Total retry attempts
-- `kafka.first.failure.time` — First failure timestamp
-- `kafka.last.failure.time` — Last failure timestamp
-- `kafka.consumer.name` — Consumer that processed it
+- `kafka.original.topic`: Original topic name
+- `kafka.exception.class`: Exception class name
+- `kafka.exception.message`: Exception message
+- `kafka.exception.stacktrace`: Full stack trace
+- `kafka.total.retry.count`: Total retry attempts
+- `kafka.first.failure.time`: First failure timestamp
+- `kafka.last.failure.time`: Last failure timestamp
+- `kafka.consumer.name`: Consumer that processed it
 
 ## Low-Level Flow API
 
@@ -452,7 +452,7 @@ fun kafkaModule(config: AppConfig) = module {
     single { DefaultConsumerSupervisorFactory(get(), get(), get(), get(), get()) }
     single { ConsumerEngine(getAll<Consumer<String, Any>>(), get(), get()) }
     
-    // Consumers — auto-discovered via getAll<Consumer>()
+    // Consumers - auto-discovered via getAll<Consumer>()
     single { OrderCreatedConsumer(get()) } bind Consumer::class
     single { PaymentConsumer() } bind Consumer::class
     single { OrderDltConsumer(get(), get()) } bind Consumer::class
@@ -514,8 +514,8 @@ The library supports a dual testing strategy:
 
 | Mode | Implementation | Use Case |
 |------|----------------|----------|
-| `embedded` | `EmbeddedKafkaBroker` | Local TDD — fast (~5s startup) |
-| `testcontainers` | `ConfluentKafkaContainer` | CI — production-like |
+| `embedded` | `EmbeddedKafkaBroker` | Local TDD, fast (~5s startup) |
+| `testcontainers` | `ConfluentKafkaContainer` | CI, production-like |
 
 **Automatic selection:**
 - `CI=true` or `GITHUB_ACTIONS=true` → Testcontainers
@@ -552,16 +552,16 @@ class MyConsumerTest : FunSpec({
 ## Predefined Retry Policies
 
 ```kotlin
-// No retries — fail immediately to DLT
+// No retries - fail immediately to DLT
 RetryPolicy.NO_RETRY
 
-// Default — 3 in-memory retries, 3 retry topic attempts
+// Default - 3 in-memory retries, 3 retry topic attempts
 RetryPolicy.DEFAULT
 
-// Aggressive — 5 retries each with shorter delays
+// Aggressive - 5 retries each with shorter delays
 RetryPolicy.AGGRESSIVE
 
-// Time-limited — 5 min max retry, 10 min max age
+// Time-limited - 5 min max retry, 10 min max age
 RetryPolicy.TIME_LIMITED
 ```
 
