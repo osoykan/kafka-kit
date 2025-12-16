@@ -2,13 +2,13 @@
 kotlin = "2.3.0"
 spring-kafka = "4.0.1"
 kotlinx-coroutines = "1.10.2"
-kotlin-logging = "7.0.7"
+kotlin-logging = "7.0.13"
 logback = "1.5.22"
 kotest = "6.0.7"
 testcontainers = "2.0.3"
 ktor = "3.3.3"
 koin = "4.1.1"
-hoplite = "2.8.2"
+hoplite = "2.9.0"
 jackson = "2.20.1"
 spotless = "8.1.0"
 ktlint = "1.8.0"
@@ -64,6 +64,6 @@ stove-ktor-testing-e2e = { module = "com.trendyol:stove-ktor-testing-e2e", versi
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.30.0" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.35.0" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 testlogger = { id = "com.adarshr.test-logger", version.ref = "testlogger" }
