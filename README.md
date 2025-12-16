@@ -247,15 +247,15 @@ ListenerConfig(
 
 ```mermaid
 flowchart TB
-    subgraph coroutines["Kotlin Coroutines Layer (Dispatchers.IO)"]
-        flow["Flow.collect { consumer.consume(record) }"]
+    subgraph top [Kotlin Coroutines - Dispatchers.IO]
+        A[Flow.collect - consumer.consume]
     end
     
-    subgraph spring["Spring Kafka Container (Virtual Threads)"]
-        poll["consumer.poll() - blocking I/O"]
+    subgraph bottom [Spring Kafka Container - Virtual Threads]
+        B[consumer.poll - blocking I/O]
     end
     
-    spring -->|emits records| coroutines
+    B -->|emits records| A
 ```
 
 - **Virtual Threads**: For blocking Kafka polling (cheap, unlimited)
