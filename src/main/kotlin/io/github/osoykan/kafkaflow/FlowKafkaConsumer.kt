@@ -3,23 +3,13 @@ package io.github.osoykan.kafkaflow
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.poller.KafkaPoller
 import io.github.osoykan.kafkaflow.poller.SpringKafkaPoller
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.channels.trySendBlocking
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.buffer
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.flow.*
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.core.ConsumerFactory
-import org.springframework.kafka.listener.CommonErrorHandler
-import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
-import org.springframework.kafka.listener.ContainerProperties
-import org.springframework.kafka.listener.MessageListener
+import org.springframework.kafka.listener.*
 import org.springframework.kafka.support.Acknowledgment
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
@@ -122,7 +112,7 @@ class FlowKafkaConsumer<K : Any, V : Any> private constructor(
     @Suppress("UNUSED_PARAMETER") bufferCapacity: Int = Channel.BUFFERED
   ): Flow<ConsumerRecord<K, V>> {
     if (stopped.get()) {
-      return kotlinx.coroutines.flow.emptyFlow()
+      return emptyFlow()
     }
     return poller.poll(topic)
   }
@@ -219,13 +209,14 @@ class FlowKafkaConsumer<K : Any, V : Any> private constructor(
   private fun createContainerPropertiesWithAck(
     topic: TopicConfig,
     config: ListenerConfig,
-    listener: org.springframework.kafka.listener.AcknowledgingMessageListener<K, V>
+    listener: AcknowledgingMessageListener<K, V>
   ): ContainerProperties = ContainerProperties(topic.name).also { props ->
-    props.setPollTimeout(topic.effectivePollTimeout(config.pollTimeout).inWholeMilliseconds)
+    props.pollTimeout = topic.effectivePollTimeout(config.pollTimeout).inWholeMilliseconds
     props.setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE)
-    props.setIdleBetweenPolls(config.idleBetweenPolls.inWholeMilliseconds)
-    props.isSyncCommits = config.syncCommits
-    props.setSyncCommitTimeout(Duration.ofMillis(config.syncCommitTimeout.inWholeMilliseconds))
+    props.idleBetweenPolls = config.idleBetweenPolls.inWholeMilliseconds
+    // Force sync commits for manual ack to ensure interceptor sees commits
+    props.isSyncCommits = true
+    props.syncCommitTimeout = Duration.ofMillis(config.syncCommitTimeout.inWholeMilliseconds)
     props.setMessageListener(listener)
 
     // Use virtual threads for Kafka poll() operations (JDK 21+)
@@ -244,6 +235,6 @@ class FlowKafkaConsumer<K : Any, V : Any> private constructor(
     containerProps: ContainerProperties
   ): ConcurrentMessageListenerContainer<K, V> = ConcurrentMessageListenerContainer(factory, containerProps).apply {
     concurrency = topic.effectiveConcurrency(listenerConfig?.concurrency ?: 1)
-    errorHandler?.let { setCommonErrorHandler(it) }
+    errorHandler?.let { commonErrorHandler = it }
   }
 }

@@ -15,6 +15,7 @@ jackson = "2.20.1"
 spotless = "8.1.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
+stove = "0.19.0"
 
 [libraries]
 # Spring Kafka
@@ -60,6 +61,12 @@ jackson-datatype-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-dat
 
 # Code formatting
 ktlint-cli = { module = "com.pinterest.ktlint:ktlint-cli", version.ref = "ktlint" }
+
+# Stove E2E Testing
+stove-testing-e2e = { module = "com.trendyol:stove-testing-e2e", version.ref = "stove" }
+stove-testing-e2e-http = { module = "com.trendyol:stove-testing-e2e-http", version.ref = "stove" }
+stove-testing-e2e-kafka = { module = "com.trendyol:stove-testing-e2e-kafka", version.ref = "stove" }
+stove-ktor-testing-e2e = { module = "com.trendyol:stove-ktor-testing-e2e", version.ref = "stove" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

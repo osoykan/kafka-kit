@@ -156,11 +156,13 @@ class SpringKafkaPoller<K : Any, V : Any>(
     topic: TopicConfig,
     listener: MessageListener<K, V>
   ): ContainerProperties = ContainerProperties(topic.name).also { props ->
-    props.setPollTimeout(topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds)
-    props.ackMode = listenerConfig.ackMode.toSpringAckMode()
-    props.setIdleBetweenPolls(listenerConfig.idleBetweenPolls.inWholeMilliseconds)
+    props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
+    // For auto-ack (MessageListener), use RECORD mode to commit after each message
+    // This ensures the consumer interceptor sees committed messages
+    props.ackMode = ContainerProperties.AckMode.RECORD
+    props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
     props.isSyncCommits = listenerConfig.syncCommits
-    props.setSyncCommitTimeout(Duration.ofMillis(listenerConfig.syncCommitTimeout.inWholeMilliseconds))
+    props.syncCommitTimeout = Duration.ofMillis(listenerConfig.syncCommitTimeout.inWholeMilliseconds)
     props.setMessageListener(listener)
     configureVirtualThreads(props, topic)
   }
@@ -169,11 +171,11 @@ class SpringKafkaPoller<K : Any, V : Any>(
     topic: TopicConfig,
     listener: org.springframework.kafka.listener.AcknowledgingMessageListener<K, V>
   ): ContainerProperties = ContainerProperties(topic.name).also { props ->
-    props.setPollTimeout(topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds)
+    props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
     props.ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
-    props.setIdleBetweenPolls(listenerConfig.idleBetweenPolls.inWholeMilliseconds)
+    props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
     props.isSyncCommits = listenerConfig.syncCommits
-    props.setSyncCommitTimeout(Duration.ofMillis(listenerConfig.syncCommitTimeout.inWholeMilliseconds))
+    props.syncCommitTimeout = Duration.ofMillis(listenerConfig.syncCommitTimeout.inWholeMilliseconds)
     props.setMessageListener(listener)
     configureVirtualThreads(props, topic)
   }
@@ -193,6 +195,6 @@ class SpringKafkaPoller<K : Any, V : Any>(
     containerProps: ContainerProperties
   ): ConcurrentMessageListenerContainer<K, V> = ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
     concurrency = topic.effectiveConcurrency(listenerConfig.concurrency)
-    errorHandler?.let { setCommonErrorHandler(it) }
+    errorHandler?.let { commonErrorHandler = it }
   }
 }

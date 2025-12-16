@@ -21,6 +21,7 @@ data class KafkaConfig(
   val bootstrapServers: String = "localhost:9092",
   val groupId: String = "ktor-kafka-flow-example",
   val useVirtualThreads: Boolean = true,
+  val interceptorClasses: String = "",
   val consumer: ConsumerSettings = ConsumerSettings(),
   val producer: ProducerSettings = ProducerSettings()
 )

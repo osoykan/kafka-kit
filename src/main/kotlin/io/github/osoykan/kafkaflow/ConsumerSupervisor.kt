@@ -50,7 +50,8 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   protected val config: ResolvedConsumerConfig,
   protected val flowConsumer: FlowKafkaConsumer<K, V>,
   protected val kafkaTemplate: KafkaTemplate<K, V>,
-  protected val metrics: KafkaFlowMetrics = NoOpMetrics
+  protected val metrics: KafkaFlowMetrics = NoOpMetrics,
+  final override val consumerName: String
 ) : ConsumerSupervisor {
   protected val log = KotlinLogging.logger("Supervisor[$consumerName]")
 
@@ -169,9 +170,7 @@ class ConsumerAutoAckSupervisor<K : Any, V : Any>(
   flowConsumer: FlowKafkaConsumer<K, V>,
   kafkaTemplate: KafkaTemplate<K, V>,
   metrics: KafkaFlowMetrics = NoOpMetrics
-) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, metrics) {
-  override val consumerName: String = consumer.consumerName
-
+) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, metrics, consumer.consumerName) {
   override fun startMainTopicConsumer(): Job = scope.launch {
     flowConsumer
       .consume(config.topic)
@@ -219,9 +218,7 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
   flowConsumer: FlowKafkaConsumer<K, V>,
   kafkaTemplate: KafkaTemplate<K, V>,
   metrics: KafkaFlowMetrics = NoOpMetrics
-) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, metrics) {
-  override val consumerName: String = consumer.consumerName
-
+) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, metrics, consumer.consumerName) {
   override fun startMainTopicConsumer(): Job = scope.launch {
     flowConsumer
       .consumeWithAck(config.topic)

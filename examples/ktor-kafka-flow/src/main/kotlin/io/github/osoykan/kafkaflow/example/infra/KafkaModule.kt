@@ -3,102 +3,62 @@ package io.github.osoykan.kafkaflow.example.infra
 import io.github.osoykan.kafkaflow.*
 import io.github.osoykan.kafkaflow.example.config.AppConfig
 import io.github.osoykan.kafkaflow.example.consumers.*
+import io.github.osoykan.kafkaflow.example.domain.DomainEvent
+import io.github.osoykan.kafkaflow.poller.PollerType
 import io.ktor.server.application.*
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.kafka.common.serialization.StringSerializer
-import org.koin.core.KoinApplication
 import org.koin.core.module.Module
 import org.koin.dsl.bind
 import org.koin.dsl.module
 import org.koin.ktor.ext.get
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory
-import org.springframework.kafka.core.DefaultKafkaProducerFactory
-import org.springframework.kafka.core.KafkaTemplate
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Koin module for Kafka infrastructure.
+ *
+ * Uses KafkaFlowFactory to abstract away the underlying Kafka client implementation.
+ * Messages are serialized/deserialized using Jackson for strongly typed domain events.
  */
 fun kafkaModule(config: AppConfig): Module = module {
   // Metrics - use NoOp for example, in production use MicrometerMetrics
   single<KafkaFlowMetrics> { LoggingMetrics() }
 
-  // Consumer factory
+  // KafkaFlow factory - abstracts Spring/Reactor Kafka internals
+  // Uses String keys and DomainEvent values with Jackson serde
   single {
-    val props = mapOf(
-      ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to config.kafka.bootstrapServers,
-      ConsumerConfig.GROUP_ID_CONFIG to config.kafka.groupId,
-      ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java,
-      ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java,
-      ConsumerConfig.AUTO_OFFSET_RESET_CONFIG to "earliest",
-      ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG to false,
-      ConsumerConfig.MAX_POLL_RECORDS_CONFIG to 500
-    )
-    DefaultKafkaConsumerFactory<String, String>(props)
-  }
-
-  // Producer factory & template
-  single {
-    val props = mapOf(
-      ProducerConfig.BOOTSTRAP_SERVERS_CONFIG to config.kafka.bootstrapServers,
-      ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG to StringSerializer::class.java,
-      ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG to StringSerializer::class.java,
-      ProducerConfig.ACKS_CONFIG to config.kafka.producer.acks,
-      ProducerConfig.RETRIES_CONFIG to config.kafka.producer.retries,
-      ProducerConfig.COMPRESSION_TYPE_CONFIG to config.kafka.producer.compression,
-      ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG to true
-    )
-    DefaultKafkaProducerFactory<String, String>(props)
-  }
-
-  single {
-    KafkaTemplate(get<DefaultKafkaProducerFactory<String, String>>())
-  }
-
-  // Listener config
-  single {
-    ListenerConfig(
-      concurrency = config.kafka.consumer.concurrency,
-      pollTimeout = config.kafka.consumer.pollTimeout,
-      useVirtualThreads = config.kafka.useVirtualThreads
-    )
-  }
-
-  // Topic resolver
-  single {
-    TopicResolver(
-      defaultGroupId = config.kafka.groupId,
-      defaultRetryPolicy = RetryPolicy.DEFAULT
-    )
-  }
-
-  // Supervisor factory
-  single<ConsumerSupervisorFactory<String, String>> {
-    DefaultConsumerSupervisorFactory(
-      consumerFactory = get(),
-      kafkaTemplate = get(),
-      topicResolver = get(),
-      listenerConfig = get(),
-      metrics = get()
+    KafkaFlowFactory.create<String, DomainEvent>(
+      KafkaFlowFactoryConfig(
+        consumerProperties = consumerProperties(config),
+        producerProperties = producerProperties(config),
+        listenerConfig = ListenerConfig(
+          concurrency = config.kafka.consumer.concurrency,
+          pollTimeout = config.kafka.consumer.pollTimeout,
+          ackMode = AckMode.RECORD,
+          syncCommitTimeout = 1.seconds,
+          useVirtualThreads = config.kafka.useVirtualThreads
+        ),
+        pollerType = PollerType.SPRING_KAFKA,
+        metrics = get(),
+        topicResolver = TopicResolver(
+          defaultGroupId = config.kafka.groupId,
+          defaultRetryPolicy = RetryPolicy.DEFAULT
+        )
+      )
     )
   }
 
   // Consumer engine - discovers all consumers
   single {
-    ConsumerEngine(
-      consumers = getAll<Consumer<String, String>>(),
-      supervisorFactory = get(),
-      metrics = get(),
+    get<KafkaFlowFactory<String, DomainEvent>>().createConsumerEngine(
+      consumers = getAll<Consumer<String, DomainEvent>>(),
       enabled = config.kafka.consumer.enabled
     )
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Register your consumers here!
-  // They will be auto-discovered by ConsumerEngine
-  // ─────────────────────────────────────────────────────────────
-
+  // Register your consumers here - they will be auto-discovered by ConsumerEngine
   single { OrderCreatedConsumer() } bind Consumer::class
   single { OrderCreatedDltConsumer() } bind Consumer::class
   single { PaymentConsumer() } bind Consumer::class
@@ -106,17 +66,44 @@ fun kafkaModule(config: AppConfig): Module = module {
 }
 
 /**
- * Extension to register Kafka with Koin.
+ * Build consumer properties map with Jackson deserializer for domain events.
  */
-fun KoinApplication.registerKafka(config: AppConfig) {
-  modules(kafkaModule(config))
+private fun consumerProperties(config: AppConfig): Map<String, Any> = buildMap {
+  put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.kafka.bootstrapServers)
+  put(ConsumerConfig.GROUP_ID_CONFIG, config.kafka.groupId)
+  put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer::class.java)
+  put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JacksonDeserializer::class.java)
+  put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
+  put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false)
+  put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500)
+  // Add interceptors if configured (used by Stove for message observation)
+  if (config.kafka.interceptorClasses.isNotBlank()) {
+    put(ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG, listOf(config.kafka.interceptorClasses))
+  }
+}
+
+/**
+ * Build producer properties map with Jackson serializer for domain events.
+ */
+private fun producerProperties(config: AppConfig): Map<String, Any> = buildMap {
+  put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.kafka.bootstrapServers)
+  put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer::class.java)
+  put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JacksonSerializer::class.java)
+  put(ProducerConfig.ACKS_CONFIG, config.kafka.producer.acks)
+  put(ProducerConfig.RETRIES_CONFIG, config.kafka.producer.retries)
+  put(ProducerConfig.COMPRESSION_TYPE_CONFIG, config.kafka.producer.compression)
+  put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true)
+  // Add interceptors if configured (used by Stove for message observation)
+  if (config.kafka.interceptorClasses.isNotBlank()) {
+    put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, listOf(config.kafka.interceptorClasses))
+  }
 }
 
 /**
  * Configure consumer engine lifecycle with Ktor application.
  */
 fun Application.configureConsumerEngine() {
-  val consumerEngine = get<ConsumerEngine<String, String>>()
+  val consumerEngine = get<ConsumerEngine<String, DomainEvent>>()
 
   monitor.subscribe(ApplicationStarted) {
     consumerEngine.start()

@@ -6,6 +6,7 @@ kafka:
   bootstrap-servers: "localhost:9092"
   group-id: "ktor-kafka-flow-example"
   use-virtual-threads: true
+  interceptor-classes: ""
   
   consumer:
     enabled: true

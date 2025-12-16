@@ -2,24 +2,16 @@ package io.github.osoykan.kafkaflow.example.consumers
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.*
+import io.github.osoykan.kafkaflow.example.domain.OrderCreatedEvent
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import java.math.BigDecimal
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * Example event class for order creation.
- */
-data class OrderCreatedEvent(
-  val orderId: String,
-  val customerId: String,
-  val amount: Double,
-  val items: List<String> = emptyList()
-)
-
-/**
- * Example order consumer demonstrating the lean consumer pattern.
+ * Example order consumer demonstrating the lean consumer pattern with strongly typed events.
  *
- * Notice how clean this is - just business logic!
+ * The consumer receives [OrderCreatedEvent] directly - no manual deserialization needed!
  *
  * All the following are handled automatically by the supervisor:
  * - In-memory retries with exponential backoff
@@ -42,49 +34,63 @@ data class OrderCreatedEvent(
   maxRetryDurationMs = 300_000, // 5 minutes max
   classifier = ClassifierType.DEFAULT // Validation errors → DLT immediately
 )
-class OrderCreatedConsumer : ConsumerAutoAck<String, String> {
+class OrderCreatedConsumer : ConsumerAutoAck<String, OrderCreatedEvent> {
   /**
    * Process an order creation event.
    *
    * This is ALL you write - no retry logic, no error handling boilerplate!
    */
-  override suspend fun consume(record: ConsumerRecord<String, String>) {
-    logger.info { "Processing order: ${record.key()} from ${record.topic()}" }
+  override suspend fun consume(record: ConsumerRecord<String, OrderCreatedEvent>) {
+    val event = record.value()
 
-    // Simulate business logic
-    val orderId = record.key()
-    val payload = record.value()
-
-    // Simulate potential failures for demo purposes
-    if (payload.contains("fail-temporary")) {
-      throw RuntimeException("Temporary failure - will be retried")
+    logger.info {
+      "Processing order: ${event.orderId} for customer ${event.customerId}, amount: ${event.amount} ${event.currency}"
     }
 
-    if (payload.contains("fail-validation")) {
-      throw IllegalArgumentException("Invalid order data - will go to DLT immediately")
-    }
+    // Validate the order
+    validateOrder(event)
 
-    logger.info { "Successfully processed order: $orderId" }
+    // Process the order (in real app: save to DB, send notifications, etc.)
+    processOrder(event)
+
+    logger.info { "Successfully processed order: ${event.orderId}" }
+  }
+
+  private fun validateOrder(event: OrderCreatedEvent) {
+    require(event.amount > BigDecimal.ZERO) {
+      "Order amount must be positive: ${event.amount}"
+    }
+    require(event.items.isNotEmpty()) {
+      "Order must have at least one item"
+    }
+  }
+
+  private fun processOrder(event: OrderCreatedEvent) {
+    // Simulate processing
+    logger.debug { "Order ${event.orderId} has ${event.items.size} items" }
   }
 }
 
 /**
  * Consumer for orders that failed and ended up in DLT.
  *
- * This is how you handle permanently failed messages - create a separate consumer!
- * You can alert, log, or take corrective action here.
+ * DLT consumers also receive typed events - the original payload is preserved.
  */
 @KafkaTopic(
   name = "example.orders.created.dlt",
   maxInMemoryRetries = 0, // No retries for DLT consumer
   classifier = ClassifierType.NEVER_RETRY
 )
-class OrderCreatedDltConsumer : ConsumerAutoAck<String, String> {
-  override suspend fun consume(record: ConsumerRecord<String, String>) {
+class OrderCreatedDltConsumer : ConsumerAutoAck<String, OrderCreatedEvent> {
+  override suspend fun consume(record: ConsumerRecord<String, OrderCreatedEvent>) {
+    val event = record.value()
+
     logger.error {
       """
             |Order permanently failed!
-            |  Order ID: ${record.key()}
+            |  Order ID: ${event.orderId}
+            |  Customer: ${event.customerId}
+            |  Amount: ${event.amount}
             |  Original topic: ${record.headerAsString("x-original-topic")}
             |  Exception: ${record.headerAsString("kafka.exception.class")}
             |  Message: ${record.headerAsString("kafka.exception.message")}
