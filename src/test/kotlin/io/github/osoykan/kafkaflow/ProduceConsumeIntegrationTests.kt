@@ -47,44 +47,6 @@ class ProduceConsumeIntegrationTests :
       consumer.stop()
     }
 
-    test("should handle high throughput - 1k messages") {
-      val topic = TestHelpers.uniqueTopicName()
-      kafka.createTopic(topic, partitions = 4)
-
-      val groupId = TestHelpers.uniqueGroupId()
-      val consumerFactory = kafka.createStringConsumerFactory(groupId)
-      val kafkaTemplate = kafka.createStringKafkaTemplate()
-
-      val producer = FlowKafkaProducer(kafkaTemplate)
-      val config = TestHelpers.testListenerConfig(concurrency = 4)
-      val consumer = FlowKafkaConsumer(consumerFactory, config)
-      val topicConfig = TopicConfig(name = topic, concurrency = 4)
-
-      val messageCount = 1000
-      val receivedMessages = mutableSetOf<String>()
-
-      val consumeJob = async {
-        consumer.consume(topicConfig).take(messageCount).collect { record ->
-          receivedMessages.add(record.value())
-        }
-      }
-
-      delay(2.seconds)
-
-      // Send messages in batches
-      (1..messageCount).chunked(100).forEach { batch ->
-        batch.forEach { i ->
-          producer.send(topic, "key-$i", "value-$i")
-        }
-      }
-
-      consumeJob.await()
-
-      receivedMessages shouldHaveSize messageCount
-
-      consumer.stop()
-    }
-
     test("should maintain message ordering within partition") {
       val topic = TestHelpers.uniqueTopicName()
       kafka.createTopic(topic, partitions = 1)

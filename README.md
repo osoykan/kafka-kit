@@ -6,6 +6,7 @@ A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write
 
 - **Lean Consumer Pattern**: Just implement `suspend fun consume(record)`, no boilerplate
 - **Flow-based API**: Consume Kafka messages as Kotlin Flows with backpressure
+- **Dual Poller Support**: Spring Kafka (default) or Reactor Kafka backends
 - **Coroutine-native**: Fully suspend-based, non-blocking async publishing
 - **Virtual Threads**: JDK 21+ Virtual Threads for Kafka polling (configurable)
 - **Two-stage Retry**: In-memory retries, Retry Topic, Dead Letter Topic
@@ -21,6 +22,10 @@ A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write
 ```kotlin
 dependencies {
     implementation("io.github.osoykan:kafka-flow:0.1.0")
+    
+    // Optional: For Reactor Kafka poller
+    implementation("io.projectreactor.kafka:reactor-kafka:1.3.24")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.10.2")
 }
 ```
 
@@ -233,9 +238,66 @@ Prevent stale messages from processing indefinitely:
 
 Expired messages are sent to DLT with expiry reason in headers.
 
+## Polling Backends
+
+Kafka Flow supports two polling backends with the same Flow API:
+
+| Backend | Best For | Virtual Threads |
+|---------|----------|-----------------|
+| **Spring Kafka** (default) | Most use cases, Spring ecosystem | `SimpleAsyncTaskExecutor.setVirtualThreads(true)` |
+| **Reactor Kafka** | Reactive stacks, non-Spring apps | `-Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true` |
+
+### Spring Kafka Poller (Default)
+
+```kotlin
+// Uses ConcurrentMessageListenerContainer internally
+val consumer = FlowKafkaConsumer(consumerFactory, listenerConfig)
+
+consumer.consume(TopicConfig(name = "orders"))
+    .collect { record -> process(record) }
+```
+
+### Reactor Kafka Poller
+
+```kotlin
+// Add dependency: io.projectreactor.kafka:reactor-kafka
+// Add dependency: org.jetbrains.kotlinx:kotlinx-coroutines-reactor
+
+val receiverOptions = ReceiverOptions.create<String, String>(
+    mapOf(
+        ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to "localhost:9092",
+        ConsumerConfig.GROUP_ID_CONFIG to "my-group",
+        ConsumerConfig.AUTO_OFFSET_RESET_CONFIG to "earliest",
+        ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java,
+        ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG to StringDeserializer::class.java
+    )
+)
+
+val poller = ReactorKafkaPoller(receiverOptions)
+val consumer = FlowKafkaConsumer.withPoller(poller)
+
+consumer.consume(TopicConfig(name = "orders"))
+    .collect { record -> process(record) }
+```
+
+### Manual Acknowledgment with Reactor Kafka
+
+```kotlin
+poller.pollWithAck(TopicConfig(name = "orders")).collect { ackable ->
+    try {
+        process(ackable.record)
+        ackable.acknowledge()  // Commit offset
+    } catch (e: Exception) {
+        // Don't acknowledge, will be redelivered
+    }
+}
+```
+
 ## Virtual Threads
 
-JDK 21+ Virtual Threads are used for Spring Kafka's blocking `consumer.poll()` operation:
+JDK 21+ Virtual Threads optimize the blocking `consumer.poll()` operation. Configuration differs by poller:
+
+### Spring Kafka Virtual Threads
 
 ```kotlin
 ListenerConfig(
@@ -243,7 +305,25 @@ ListenerConfig(
 )
 ```
 
-**Architecture:**
+Internally uses `SimpleAsyncTaskExecutor.setVirtualThreads(true)` per container.
+
+### Reactor Kafka Virtual Threads
+
+Set the system property before creating pollers:
+
+```bash
+-Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
+```
+
+Or programmatically:
+
+```kotlin
+System.setProperty("reactor.schedulers.defaultBoundedElasticOnVirtualThreads", "true")
+```
+
+This makes `Schedulers.boundedElastic()` use Virtual Threads globally.
+
+### Architecture
 
 ```mermaid
 flowchart TB
@@ -251,7 +331,7 @@ flowchart TB
         A[Flow.collect - consumer.consume]
     end
     
-    subgraph bottom [Spring Kafka Container - Virtual Threads]
+    subgraph bottom [Kafka Poller - Virtual Threads]
         B[consumer.poll - blocking I/O]
     end
     
@@ -567,11 +647,12 @@ RetryPolicy.TIME_LIMITED
 
 ## Requirements
 
-| Requirement | Version |
-|-------------|---------|
-| Kotlin | 2.0+ |
-| JDK | 21+ (for Virtual Threads) |
-| Spring Kafka | 4.0+ |
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Kotlin | 2.0+ | |
+| JDK | 21+ | Required for Virtual Threads |
+| Spring Kafka | 4.0+ | Default poller |
+| Reactor Kafka | 1.3+ | Optional, alternative poller |
 
 ## Examples
 

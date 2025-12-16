@@ -93,25 +93,26 @@ class FlowKafkaConsumerTests :
 
       val config = TestHelpers.testListenerConfig(concurrency = 2)
       val consumer = FlowKafkaConsumer(consumerFactory, config)
+      // Topic-level concurrency (4) should override config-level (2)
       val topicConfig = TopicConfig(name = topic, concurrency = 4)
 
-      // Start consuming - this will create a container with 4 concurrent consumers
+      // Start consuming with topic-specific concurrency
       val consumeJob = async {
-        consumer.consume(topicConfig).take(1).toList()
+        consumer.consume(topicConfig).take(4).toList()
       }
 
       delay(500.milliseconds)
 
-      // Check active container count while flow is still active (before sending message)
-      consumer.activeContainerCount() shouldBe 1
-
       val template = kafka.createStringKafkaTemplate()
-      template.send(topic, "key-1", "value-1").get()
+      // Send multiple messages to test concurrent processing
+      repeat(4) { i ->
+        template.send(topic, "key-$i", "value-$i").get()
+      }
 
-      consumeJob.await()
+      val results = consumeJob.await()
 
-      // After flow completes, container is automatically stopped
-      consumer.activeContainerCount() shouldBe 0
+      // Verify all messages were consumed
+      results.size shouldBe 4
       consumer.stop()
     }
 

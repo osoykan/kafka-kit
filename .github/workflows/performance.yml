@@ -1,0 +1,87 @@
+name: Performance Tests
+
+on:
+  # Manual trigger with optional parameters
+  workflow_dispatch:
+    inputs:
+      message_count:
+        description: 'Message count for throughput tests'
+        required: false
+        default: '10000'
+  # Weekly schedule (Sundays at midnight)
+  schedule:
+    - cron: '0 0 * * 0'
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance-tests:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: current
+          cache-read-only: false
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties', '**/gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Run Performance Tests
+        env:
+          CI: true
+          PERFORMANCE_TESTS: true
+        run: |
+          ./gradlew test --tests "*.PerformanceTests" \
+            --build-cache \
+            --no-daemon \
+            -Dorg.gradle.parallel=true \
+            2>&1 | tee performance-output.txt
+
+      - name: Extract Performance Results
+        if: always()
+        run: |
+          echo "## Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract results from test output
+          if grep -q "===" performance-output.txt 2>/dev/null; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -A 20 "===" performance-output.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Performance metrics not found in output" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Performance Output
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: performance-results-${{ github.run_number }}
+          path: performance-output.txt
+          retention-days: 30
