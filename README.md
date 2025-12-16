@@ -23,7 +23,7 @@ A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write
 
 ```kotlin
 dependencies {
-    implementation("io.github.osoykan:kafka-flow:0.1.0")
+    implementation("io.github.osoykan:kafka-flow:0.1.0") // to be published
     
     // Optional: For Reactor Kafka poller
     implementation("io.projectreactor.kafka:reactor-kafka:1.3.24")
