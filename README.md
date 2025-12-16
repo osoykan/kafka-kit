@@ -1,6 +1,6 @@
 # Kafka Flow
 
-> ⚠️ **Work in Progress**: This library is a proof of concept and is under active development. APIs may change. Not recommended for production use yet.
+> ⚠️ **Work in Progress**: This library is a proof of concept and is under active development. APIs may change.
 
 A Kotlin Flow-based Kafka consumer/producer library built on Spring Kafka. Write **lean consumers** that focus purely on business logic. All retry, DLT, and metrics handling is automatic.
 
