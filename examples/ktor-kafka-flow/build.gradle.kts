@@ -12,6 +12,12 @@ repositories {
   mavenCentral()
 }
 
+kotlin {
+  compilerOptions {
+    allWarningsAsErrors.set(true)
+  }
+}
+
 spotless {
   kotlin {
     ktlint(

@@ -91,8 +91,8 @@ class TtlAndClassifierRetryTests :
 
       val result = processor.process(record) { "should not be called" }
 
-      result.shouldBeInstanceOf<ProcessingResult.Expired>()
-      (result as ProcessingResult.Expired).reason.contains("Max retry duration exceeded") shouldBe true
+      val expired = result.shouldBeInstanceOf<ProcessingResult.Expired>()
+      expired.reason.contains("Max retry duration exceeded") shouldBe true
     }
 
     test("RetryableProcessor should expire message when max message age exceeded") {
@@ -128,8 +128,8 @@ class TtlAndClassifierRetryTests :
 
       val result = processor.process(record) { "should not be called" }
 
-      result.shouldBeInstanceOf<ProcessingResult.Expired>()
-      (result as ProcessingResult.Expired).reason.contains("Max message age exceeded") shouldBe true
+      val expired = result.shouldBeInstanceOf<ProcessingResult.Expired>()
+      expired.reason.contains("Max message age exceeded") shouldBe true
     }
 
     test("RetryableProcessor should process normally when TTL not exceeded") {
@@ -165,8 +165,8 @@ class TtlAndClassifierRetryTests :
 
       val result = processor.process(record) { rec -> rec.value().uppercase() }
 
-      result.shouldBeInstanceOf<ProcessingResult.Success<String>>()
-      (result as ProcessingResult.Success).value shouldBe "VALUE"
+      val success = result.shouldBeInstanceOf<ProcessingResult.Success<String>>()
+      success.value shouldBe "VALUE"
     }
 
     test("AlwaysRetryClassifier should retry all exceptions including validation errors") {

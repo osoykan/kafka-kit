@@ -12,6 +12,7 @@ hoplite = "2.8.2"
 jackson = "2.20.1"
 spotless = "8.1.0"
 ktlint = "1.8.0"
+testlogger = "4.0.0"
 
 [libraries]
 # Spring Kafka
@@ -58,3 +59,4 @@ ktlint-cli = { module = "com.pinterest.ktlint:ktlint-cli", version.ref = "ktlint
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 maven-publish = { id = "com.vanniktech.maven.publish", version = "0.30.0" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+testlogger = { id = "com.adarshr.test-logger", version.ref = "testlogger" }

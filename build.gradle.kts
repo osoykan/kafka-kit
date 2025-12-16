@@ -2,6 +2,7 @@ plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.maven.publish)
   alias(libs.plugins.spotless)
+  alias(libs.plugins.testlogger)
 }
 
 group = "io.github.osoykan"
@@ -19,6 +20,9 @@ java {
 
 kotlin {
   jvmToolchain(21)
+  compilerOptions {
+    allWarningsAsErrors.set(true)
+  }
 }
 
 spotless {
@@ -62,6 +66,20 @@ dependencies {
 
 tasks.test {
   useJUnitPlatform()
+}
+
+testlogger {
+  theme = com.adarshr.gradle.testlogger.theme.ThemeType.MOCHA
+  showExceptions = true
+  showStackTraces = true
+  showFullStackTraces = false
+  showCauses = true
+  slowThreshold = 2000
+  showSummary = true
+  showSimpleNames = true
+  showPassed = true
+  showSkipped = true
+  showFailed = true
 }
 
 mavenPublishing {

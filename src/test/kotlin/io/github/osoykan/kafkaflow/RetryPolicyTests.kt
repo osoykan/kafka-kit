@@ -99,8 +99,8 @@ class RetryPolicyTests :
         rec.value().uppercase()
       }
 
-      result.shouldBeInstanceOf<ProcessingResult.Success<String>>()
-      (result as ProcessingResult.Success).value shouldBe "VALUE"
+      val success = result.shouldBeInstanceOf<ProcessingResult.Success<String>>()
+      success.value shouldBe "VALUE"
     }
 
     test("RetryableProcessor should retry and succeed after failures") {
@@ -148,9 +148,9 @@ class RetryPolicyTests :
         throw RuntimeException("Always fails")
       }
 
-      result.shouldBeInstanceOf<ProcessingResult.SentToRetryTopic>()
-      (result as ProcessingResult.SentToRetryTopic).topic shouldBe retryTopic
-      result.attempt shouldBe 1
+      val sentToRetry = result.shouldBeInstanceOf<ProcessingResult.SentToRetryTopic>()
+      sentToRetry.topic shouldBe retryTopic
+      sentToRetry.attempt shouldBe 1
     }
 
     test("RetryableProcessor should send to DLT after retry topic attempts exhausted") {
@@ -189,8 +189,8 @@ class RetryPolicyTests :
         throw RuntimeException("Still failing")
       }
 
-      result.shouldBeInstanceOf<ProcessingResult.SentToDlt>()
-      (result as ProcessingResult.SentToDlt).topic shouldBe dltTopic
+      val sentToDlt = result.shouldBeInstanceOf<ProcessingResult.SentToDlt>()
+      sentToDlt.topic shouldBe dltTopic
     }
 
     test("full retry flow: message → in-memory retries → retry topic → DLT") {
@@ -235,8 +235,8 @@ class RetryPolicyTests :
       val result2 = processor.process(retryRecord1) {
         throw RuntimeException("Second failure")
       }
-      result2.shouldBeInstanceOf<ProcessingResult.SentToRetryTopic>()
-      (result2 as ProcessingResult.SentToRetryTopic).attempt shouldBe 2
+      val sentToRetry2 = result2.shouldBeInstanceOf<ProcessingResult.SentToRetryTopic>()
+      sentToRetry2.attempt shouldBe 2
 
       // Step 3: Process from retry topic (attempt 2) - should go to DLT
       val retryRecord2 = ConsumerRecord(retryTopic, 0, 0L, "key", "value").apply {
@@ -270,7 +270,7 @@ class RetryPolicyTests :
         it.value().length
       }
 
-      result.shouldBeInstanceOf<ProcessingResult.Success<Int>>()
-      (result as ProcessingResult.Success).value shouldBe 5
+      val success = result.shouldBeInstanceOf<ProcessingResult.Success<Int>>()
+      success.value shouldBe 5
     }
   })
