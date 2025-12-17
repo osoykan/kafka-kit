@@ -1,4 +1,4 @@
-package io.github.osoykan.ktor.springkafka
+package io.github.osoykan.ktorkafka
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.springframework.beans.factory.NoSuchBeanDefinitionException

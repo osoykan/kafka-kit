@@ -1,6 +1,4 @@
 plugins {
-  alias(libs.plugins.kotlin.jvm)
-  alias(libs.plugins.spotless)
   application
 }
 
@@ -8,37 +6,9 @@ application {
   mainClass.set("io.github.osoykan.kafkaflow.example.ExampleKtorAppKt")
 }
 
-repositories {
-  mavenCentral()
-}
-
-kotlin {
-  compilerOptions {
-    allWarningsAsErrors.set(true)
-  }
-}
-
-spotless {
-  kotlin {
-    ktlint(
-      libs.ktlint.cli
-        .get()
-        .version
-    ).setEditorConfigPath(rootProject.layout.projectDirectory.file(".editorconfig"))
-    targetExclude("build/", "generated/", "out/")
-  }
-  kotlinGradle {
-    ktlint(
-      libs.ktlint.cli
-        .get()
-        .version
-    ).setEditorConfigPath(rootProject.layout.projectDirectory.file(".editorconfig"))
-  }
-}
-
 dependencies {
   // Kafka Flow
-  implementation(project(":"))
+  implementation(project(":kafka-flow"))
 
   // Ktor Server
   implementation(libs.ktor.server.core)
@@ -74,8 +44,4 @@ dependencies {
   testImplementation(libs.stove.testing.e2e.http)
   testImplementation(libs.stove.testing.e2e.kafka)
   testImplementation(libs.stove.ktor.testing.e2e)
-}
-
-tasks.test {
-  useJUnitPlatform()
 }

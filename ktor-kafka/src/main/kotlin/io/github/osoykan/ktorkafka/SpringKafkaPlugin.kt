@@ -1,4 +1,4 @@
-package io.github.osoykan.ktor.springkafka
+package io.github.osoykan.ktorkafka
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.*
@@ -9,6 +9,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.annotation.EnableKafka
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory
 import org.springframework.kafka.core.ConsumerFactory
@@ -195,16 +196,17 @@ class SpringKafkaContextHolder internal constructor(
     val consumerFactory = DefaultKafkaConsumerFactory<Any, Any>(consumerProps)
     beanFactory.registerSingleton(consumerFactoryName, consumerFactory)
 
-    // Create listener container factory
+    // Create listener container factory with virtual threads
     val containerFactory = ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
       setConsumerFactory(consumerFactory)
       setConcurrency(config.concurrency)
       containerProperties.pollTimeout = config.pollTimeout.inWholeMilliseconds
       containerProperties.ackMode = ContainerProperties.AckMode.RECORD
+      containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
     }
     beanFactory.registerSingleton(containerFactoryName, containerFactory)
 
-    logger.info { "Registered consumer factory '$consumerFactoryName' for ${config.bootstrapServers}" }
+    logger.info { "Registered consumer factory '$consumerFactoryName' (virtual threads) for ${config.bootstrapServers}" }
   }
 
   private fun registerNamedProducerFactory(
@@ -344,5 +346,6 @@ internal open class DynamicKafkaConfiguration {
       setConcurrency(config.getConsumerSettings().concurrency)
       containerProperties.pollTimeout = config.getConsumerSettings().pollTimeout.inWholeMilliseconds
       containerProperties.ackMode = ContainerProperties.AckMode.RECORD
+      containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
     }
 }

@@ -1,7 +1,8 @@
 rootProject.name = "kafka-flow"
 
-// Ktor Spring Kafka Plugin
-include(":ktor-spring-kafka-plugin")
+// Libraries
+include(":kafka-flow")
+include(":ktor-kafka")
 
 // Examples
 include(":examples:ktor-kafka-flow")

@@ -1,4 +1,4 @@
-package io.github.osoykan.ktor.springkafka
+package io.github.osoykan.ktorkafka
 
 import org.apache.kafka.common.serialization.Deserializer
 import org.apache.kafka.common.serialization.Serializer

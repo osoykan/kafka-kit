@@ -1,6 +1,6 @@
 package io.github.osoykan.springkafka.example.infra
 
-import io.github.osoykan.ktor.springkafka.DependencyResolver
+import io.github.osoykan.ktorkafka.DependencyResolver
 import org.koin.core.Koin
 import org.koin.core.qualifier.named
 import kotlin.reflect.KClass

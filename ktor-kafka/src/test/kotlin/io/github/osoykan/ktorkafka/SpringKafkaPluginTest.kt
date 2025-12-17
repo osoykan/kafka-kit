@@ -1,4 +1,4 @@
-package io.github.osoykan.ktor.springkafka
+package io.github.osoykan.ktorkafka
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.DescribeSpec

@@ -1,4 +1,4 @@
-package io.github.osoykan.ktor.springkafka
+package io.github.osoykan.ktorkafka
 
 import io.ktor.server.application.*
 import org.springframework.kafka.core.KafkaTemplate

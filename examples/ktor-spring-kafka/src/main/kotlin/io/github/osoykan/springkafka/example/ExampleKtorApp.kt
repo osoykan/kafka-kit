@@ -8,7 +8,7 @@ import com.sksamuel.hoplite.ExperimentalHoplite
 import com.sksamuel.hoplite.addCommandLineSource
 import com.sksamuel.hoplite.addResourceSource
 import io.github.oshai.kotlinlogging.KotlinLogging
-import io.github.osoykan.ktor.springkafka.SpringKafka
+import io.github.osoykan.ktorkafka.SpringKafka
 import io.github.osoykan.springkafka.example.api.configureRouting
 import io.github.osoykan.springkafka.example.config.AppConfig
 import io.github.osoykan.springkafka.example.domain.NotificationService

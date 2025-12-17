@@ -1,8 +1,8 @@
 package io.github.osoykan.springkafka.example.api
 
-import io.github.osoykan.ktor.springkafka.isSpringKafkaRunning
-import io.github.osoykan.ktor.springkafka.kafkaTemplate
-import io.github.osoykan.ktor.springkafka.springKafkaBean
+import io.github.osoykan.ktorkafka.isSpringKafkaRunning
+import io.github.osoykan.ktorkafka.kafkaTemplate
+import io.github.osoykan.ktorkafka.springKafkaBean
 import io.github.osoykan.springkafka.example.domain.*
 import io.github.osoykan.springkafka.example.infra.EventMetricsService
 import io.ktor.http.*
