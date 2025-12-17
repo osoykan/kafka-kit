@@ -2,6 +2,7 @@ package io.github.osoykan.kafkaflow
 
 import io.github.osoykan.kafkaflow.support.SharedKafka
 import io.github.osoykan.kafkaflow.support.TestHelpers
+import io.github.osoykan.kafkaflow.support.acknowledgeAndExtract
 import io.kotest.core.annotation.EnabledIf
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.longs.shouldBeLessThan
@@ -43,7 +44,7 @@ class PerformanceTests :
       val receivedCount = AtomicInteger(0)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(messageCount).collect {
+        consumer.consume(topicConfig).acknowledgeAndExtract().take(messageCount).collect {
           receivedCount.incrementAndGet()
         }
       }
@@ -101,7 +102,7 @@ class PerformanceTests :
       val receivedCount = AtomicInteger(0)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(messageCount).collect {
+        consumer.consume(topicConfig).acknowledgeAndExtract().take(messageCount).collect {
           receivedCount.incrementAndGet()
         }
       }
@@ -160,7 +161,7 @@ class PerformanceTests :
       val receivedCount = AtomicInteger(0)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(messageCount).collect { record ->
+        consumer.consume(topicConfig).acknowledgeAndExtract().take(messageCount).collect { record ->
           val sentTime = record.headerAsString("sent-time")?.toLongOrNull()
           if (sentTime != null) {
             latencies.add(System.currentTimeMillis() - sentTime)
@@ -284,7 +285,7 @@ class PerformanceTests :
         val receivedCount = AtomicInteger(0)
 
         val consumeJob = async {
-          consumer.consume(topicConfig).take(messageCount).collect {
+          consumer.consume(topicConfig).acknowledgeAndExtract().take(messageCount).collect {
             receivedCount.incrementAndGet()
           }
         }

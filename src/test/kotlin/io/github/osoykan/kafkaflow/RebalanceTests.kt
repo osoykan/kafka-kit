@@ -2,6 +2,7 @@ package io.github.osoykan.kafkaflow
 
 import io.github.osoykan.kafkaflow.support.SharedKafka
 import io.github.osoykan.kafkaflow.support.TestHelpers
+import io.github.osoykan.kafkaflow.support.acknowledgeAndExtract
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -9,7 +10,6 @@ import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.toList
 import kotlin.time.Duration.Companion.seconds
 
 class RebalanceTests :
@@ -30,7 +30,11 @@ class RebalanceTests :
 
       val records1 = mutableListOf<String>()
       val job1 = async {
-        consumer1.consume(topicConfig).take(10).collect { records1.add(it.value()) }
+        consumer1
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(10)
+          .collect { records1.add(it.value()) }
       }
 
       delay(2.seconds)
@@ -48,7 +52,11 @@ class RebalanceTests :
 
       val records2 = mutableListOf<String>()
       val job2 = async {
-        consumer2.consume(topicConfig).take(5).collect { records2.add(it.value()) }
+        consumer2
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(5)
+          .collect { records2.add(it.value()) }
       }
 
       delay(2.seconds)
@@ -91,11 +99,11 @@ class RebalanceTests :
       val records2 = mutableListOf<String>()
 
       val job1 = async {
-        consumer1.consume(topicConfig).collect { records1.add(it.value()) }
+        consumer1.consume(topicConfig).acknowledgeAndExtract().collect { records1.add(it.value()) }
       }
 
       val job2 = async {
-        consumer2.consume(topicConfig).collect { records2.add(it.value()) }
+        consumer2.consume(topicConfig).acknowledgeAndExtract().collect { records2.add(it.value()) }
       }
 
       delay(2.seconds)
@@ -144,7 +152,7 @@ class RebalanceTests :
       val topicConfig = TopicConfig(name = topic)
 
       val job1 = async {
-        consumer1.consume(topicConfig).collect { record ->
+        consumer1.consume(topicConfig).acknowledgeAndExtract().collect { record ->
           synchronized(lock) {
             allReceivedMessages.add(record.value())
           }
@@ -165,7 +173,7 @@ class RebalanceTests :
       val consumer2 = FlowKafkaConsumer(consumerFactory2, TestHelpers.testListenerConfig())
 
       val job2 = async {
-        consumer2.consume(topicConfig).collect { record ->
+        consumer2.consume(topicConfig).acknowledgeAndExtract().collect { record ->
           synchronized(lock) {
             allReceivedMessages.add(record.value())
           }
@@ -210,13 +218,13 @@ class RebalanceTests :
       val records2 = mutableListOf<String>()
 
       val job1 = async {
-        consumer1.consume(topicConfig).collect { records1.add(it.value()) }
+        consumer1.consume(topicConfig).acknowledgeAndExtract().collect { records1.add(it.value()) }
       }
 
       delay(2.seconds)
 
       val job2 = async {
-        consumer2.consume(topicConfig).collect { records2.add(it.value()) }
+        consumer2.consume(topicConfig).acknowledgeAndExtract().collect { records2.add(it.value()) }
       }
 
       delay(3.seconds)

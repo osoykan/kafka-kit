@@ -1,14 +1,12 @@
 package io.github.osoykan.kafkaflow
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.github.osoykan.kafkaflow.poller.AckableRecord
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import org.apache.kafka.clients.consumer.ConsumerRecord
-import org.springframework.kafka.core.ConsumerFactory
+import kotlinx.coroutines.flow.catch
 import org.springframework.kafka.core.KafkaTemplate
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
-
-private val logger = KotlinLogging.logger {}
 
 /**
  * Interface for consumer supervisors.
@@ -104,39 +102,43 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   /**
    * Handle the processing result with logging and metrics.
    * Common result handling extracted to avoid duplication.
+   *
+   * @return true if the record was successfully handled (success, retry, or DLT)
    */
   protected fun handleProcessingResult(
+    ackFn: () -> Unit,
     result: ProcessingResult<*>,
     topic: String,
-    duration: kotlin.time.Duration
-  ): Boolean {
-    when (result) {
-      is ProcessingResult.Success -> {
-        metrics.recordProcessingSuccess(topic, consumerName, duration)
-        log.debug { "Successfully processed record from $topic" }
-        return true
-      }
+    duration: Duration
+  ): Boolean = when (result) {
+    is ProcessingResult.Success -> {
+      metrics.recordProcessingSuccess(topic, consumerName, duration)
+      log.debug { "Successfully processed record from $topic" }
+      true
+    }
 
-      is ProcessingResult.SentToRetryTopic -> {
-        log.warn { "Record sent to retry topic: ${result.topic} (attempt ${result.attempt})" }
-        return true // Considered handled
-      }
+    is ProcessingResult.SentToRetryTopic -> {
+      ackFn() // Acknowledge offset since sent to retry topic
+      log.warn { "Record sent to retry topic: ${result.topic} (attempt ${result.attempt})" }
+      true // Considered handled
+    }
 
-      is ProcessingResult.SentToDlt -> {
-        log.error { "Record sent to DLT: ${result.topic} - ${result.reason}" }
-        return true // Considered handled (in DLT now)
-      }
+    is ProcessingResult.SentToDlt -> {
+      ackFn() // Acknowledge offset since sent to DLT
+      log.error { "Record sent to DLT: ${result.topic} - ${result.reason}" }
+      true // Considered handled (in DLT now)
+    }
 
-      is ProcessingResult.Expired -> {
-        log.warn { "Record expired and sent to DLT: ${result.topic} - ${result.reason}" }
-        return true // Considered handled
-      }
+    is ProcessingResult.Expired -> {
+      ackFn() // Acknowledge offset since expired
+      log.warn { "Record expired and sent to DLT: ${result.topic} - ${result.reason}" }
+      true // Considered handled
+    }
 
-      is ProcessingResult.Failed -> {
-        log.error(result.exception) { "Failed to process/send record" }
-        metrics.recordProcessingFailure(topic, consumerName, result.exception)
-        return false
-      }
+    is ProcessingResult.Failed -> {
+      log.error(result.exception) { "Failed to process/send record" }
+      metrics.recordProcessingFailure(topic, consumerName, result.exception)
+      false
     }
   }
 
@@ -158,7 +160,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
 /**
  * Supervisor for auto-ack consumers.
  *
- * INTERNAL: Handles all retry logic, metrics, and error handling.
+ * Uses CommitStrategy-based ack mode. Spring Kafka handles commits automatically.
  * Consumer only implements consume() - nothing else.
  */
 class ConsumerAutoAckSupervisor<K : Any, V : Any>(
@@ -174,7 +176,7 @@ class ConsumerAutoAckSupervisor<K : Any, V : Any>(
       .catch { e ->
         log.error(e) { "Stream error on main topic: ${config.topic.name}" }
         metrics.recordProcessingFailure(config.topic.name, consumerName, e)
-      }.collect { record -> handleRecord(record, config.topic.name) }
+      }.collect { ackRecord -> handleRecord(ackRecord, config.topic.name) }
   }
 
   override fun launchRetryConsumer(topicConfig: TopicConfig): Job = scope.launch {
@@ -183,31 +185,27 @@ class ConsumerAutoAckSupervisor<K : Any, V : Any>(
       .catch { e ->
         log.error(e) { "Stream error on retry topic: ${topicConfig.name}" }
         metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
-      }.collect { record -> handleRecord(record, topicConfig.name) }
+      }.collect { ackRecord -> handleRecord(ackRecord, topicConfig.name) }
   }
 
   /**
-   * INTERNAL: All retry logic and metrics hidden here.
-   * Consumer just sees consume() called - nothing else.
+   * Process record. Spring Kafka handles commits based on CommitStrategy.
    */
-  private suspend fun handleRecord(record: ConsumerRecord<K, V>, topic: String) {
-    metrics.recordConsumed(topic, consumerName, record.partition())
+  private suspend fun handleRecord(ackRecord: AckableRecord<K, V>, topic: String) {
+    metrics.recordConsumed(topic, consumerName, ackRecord.record.partition())
 
     val startTime = System.nanoTime()
-    val result = retryProcessor.process(record) { rec ->
-      consumer.consume(rec) // Call the clean consumer
-    }
+    val result = retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec) }
     val duration = (System.nanoTime() - startTime).nanoseconds
 
-    handleProcessingResult(result, topic, duration)
+    handleProcessingResult({ ackRecord.acknowledge() }, result, topic, duration)
   }
 }
 
 /**
  * Supervisor for manual-ack consumers.
  *
- * INTERNAL: Handles all retry logic, metrics, and error handling.
- * Consumer implements consume() with acknowledgment control.
+ * Uses MANUAL_IMMEDIATE mode - user controls when to acknowledge.
  */
 class ConsumerManualAckSupervisor<K : Any, V : Any>(
   private val consumer: ConsumerManualAck<K, V>,
@@ -218,7 +216,7 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
 ) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, metrics, consumer.consumerName) {
   override fun startMainTopicConsumer(): Job = scope.launch {
     flowConsumer
-      .consumeWithAck(config.topic)
+      .consume(config.topic)
       .catch { e ->
         log.error(e) { "Stream error on main topic: ${config.topic.name}" }
         metrics.recordProcessingFailure(config.topic.name, consumerName, e)
@@ -227,7 +225,7 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
 
   override fun launchRetryConsumer(topicConfig: TopicConfig): Job = scope.launch {
     flowConsumer
-      .consumeWithAck(topicConfig)
+      .consume(topicConfig)
       .catch { e ->
         log.error(e) { "Stream error on retry topic: ${topicConfig.name}" }
         metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
@@ -235,25 +233,16 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
   }
 
   /**
-   * INTERNAL: All retry logic and metrics hidden here.
+   * Process record - user controls acknowledgment via SpringAcknowledgmentAdapter.
    */
-  private suspend fun handleRecord(ackRecord: AcknowledgingRecord<K, V>, topic: String) {
+  private suspend fun handleRecord(ackRecord: AckableRecord<K, V>, topic: String) {
     metrics.recordConsumed(topic, consumerName, ackRecord.record.partition())
 
     val startTime = System.nanoTime()
-    val wrappedAck = SpringAcknowledgmentAdapter(ackRecord.acknowledgment)
-
-    val result = retryProcessor.process(ackRecord.record) { rec ->
-      consumer.consume(rec, wrappedAck) // Call the consumer with ack
-    }
+    val ack = Acknowledgment { ackRecord.acknowledge() }
+    val result = retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec, ack) }
     val duration = (System.nanoTime() - startTime).nanoseconds
 
-    val handled = handleProcessingResult(result, topic, duration)
-
-    // For manual ack, acknowledge after successful handling or when sent to retry/DLT
-    if (handled && result !is ProcessingResult.Failed) {
-      ackRecord.acknowledgment.acknowledge()
-    }
-    // If Failed and not handled, don't acknowledge - message will be redelivered
+    handleProcessingResult({ }, result, topic, duration)
   }
 }

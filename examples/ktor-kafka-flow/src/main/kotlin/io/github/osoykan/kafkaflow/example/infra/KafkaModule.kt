@@ -4,7 +4,6 @@ import io.github.osoykan.kafkaflow.*
 import io.github.osoykan.kafkaflow.example.config.AppConfig
 import io.github.osoykan.kafkaflow.example.consumers.*
 import io.github.osoykan.kafkaflow.example.domain.DomainEvent
-import io.github.osoykan.kafkaflow.poller.CommitStrategy
 import io.ktor.server.application.*
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerConfig
@@ -34,8 +33,7 @@ fun kafkaModule(config: AppConfig): Module = module {
         producerProperties = producerProperties(config),
         listenerConfig = ListenerConfig(
           concurrency = config.kafka.consumer.concurrency,
-          pollTimeout = config.kafka.consumer.pollTimeout,
-          commitStrategy = CommitStrategy.PerRecord
+          pollTimeout = config.kafka.consumer.pollTimeout
         ),
         metrics = get(),
         topicResolver = TopicResolver(

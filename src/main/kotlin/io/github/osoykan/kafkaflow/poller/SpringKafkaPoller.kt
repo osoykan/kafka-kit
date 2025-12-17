@@ -5,7 +5,6 @@ import io.github.osoykan.kafkaflow.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
-import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.listener.*
@@ -16,63 +15,80 @@ import java.util.concurrent.atomic.AtomicBoolean
 private val logger = KotlinLogging.logger {}
 
 /**
+ * Acknowledgment mode for the poller.
+ */
+enum class AckMode {
+  /**
+   * Auto-ack: Spring Kafka commits based on [CommitStrategy].
+   * The [AckableRecord.acknowledge] is a no-op.
+   */
+  AUTO,
+
+  /**
+   * Manual-ack: User calls [AckableRecord.acknowledge] to commit.
+   * Uses MANUAL_IMMEDIATE - commit happens immediately.
+   */
+  MANUAL
+}
+
+/**
  * Spring Kafka based poller using ConcurrentMessageListenerContainer.
- *
- * Features:
- * - Virtual Threads support for blocking poll() operations (JDK 21+)
- * - Auto/Manual acknowledgment modes
- * - Configurable concurrency per topic
- *
- * Spring Kafka handles:
- * - Rebalancing
- * - Commit management
- * - Consumer lifecycle
  *
  * @param consumerFactory The Spring Kafka consumer factory
  * @param listenerConfig Default listener configuration
+ * @param ackMode Acknowledgment mode (AUTO or MANUAL)
  * @param errorHandler Optional custom error handler
- * @param dispatcher Coroutine dispatcher for flow emission (default: Dispatchers.IO)
+ * @param dispatcher Coroutine dispatcher for flow emission
  */
 class SpringKafkaPoller<K : Any, V : Any>(
   private val consumerFactory: ConsumerFactory<K, V>,
   private val listenerConfig: ListenerConfig,
+  private val ackMode: AckMode = AckMode.AUTO,
   private val errorHandler: CommonErrorHandler? = null,
   private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : KafkaPoller<K, V> {
   private val containers = ConcurrentHashMap<String, ConcurrentMessageListenerContainer<K, V>>()
   private val stopped = AtomicBoolean(false)
 
-  /**
-   * Consumes messages with auto-acknowledgment based on ListenerConfig.commitStrategy.
-   *
-   * @param topic Topic configuration
-   * @param bufferCapacity Controls backpressure - when buffer is full, Kafka listener blocks
-   */
   override fun poll(
     topic: TopicConfig,
     bufferCapacity: Int
-  ): Flow<ConsumerRecord<K, V>> = callbackFlow {
+  ): Flow<AckableRecord<K, V>> = when (ackMode) {
+    AckMode.AUTO -> pollAutoAck(topic, bufferCapacity)
+    AckMode.MANUAL -> pollManualAck(topic, bufferCapacity)
+  }
+
+  /**
+   * Auto-ack: Spring Kafka commits based on CommitStrategy.
+   */
+  private fun pollAutoAck(
+    topic: TopicConfig,
+    bufferCapacity: Int
+  ): Flow<AckableRecord<K, V>> = callbackFlow {
     if (stopped.get()) {
       close()
       return@callbackFlow
     }
 
     val listener = MessageListener<K, V> { record ->
-      // trySendBlocking will block when buffer is full, providing backpressure
-      trySendBlocking(record).exceptionOrNull()?.let { exception ->
+      val ackableRecord = AckableRecord(
+        record = record,
+        acknowledge = { /* no-op - Spring Kafka auto-commits */ }
+      )
+      trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
         if (exception !is CancellationException) {
           logger.error(exception) { "Failed to emit record from topic ${topic.name}: ${record.key()}" }
         }
       }
     }
 
-    val containerProps = createContainerProperties(topic, listener)
+    val containerProps = createAutoAckContainerProperties(topic, listener)
     val container = createContainer(topic, containerProps)
     containers["${topic.name}-auto"] = container
 
     logger.info {
-      "SpringKafkaPoller: Starting auto-ack consumer for topic: ${topic.name} " +
-        "concurrency: ${container.concurrency}, bufferCapacity: $bufferCapacity"
+      "SpringKafkaPoller: Starting auto-ack consumer for topic: ${topic.name}, " +
+        "concurrency: ${container.concurrency}, strategy: ${listenerConfig.commitStrategy}"
     }
     container.start()
 
@@ -84,27 +100,9 @@ class SpringKafkaPoller<K : Any, V : Any>(
   }.buffer(bufferCapacity).flowOn(dispatcher)
 
   /**
-   * Consumes messages with manual acknowledgment.
-   *
-   * Uses MANUAL_IMMEDIATE ack mode. You must call `acknowledge()` on each record
-   * after successful processing to commit the offset.
-   *
-   * @param topic Topic configuration
-   * @param bufferCapacity Controls backpressure - when buffer is full, Kafka listener blocks
-   *
-   * Example:
-   * ```kotlin
-   * poller.pollWithAck(topic).collect { ackable ->
-   *   try {
-   *     process(ackable.record)
-   *     ackable.acknowledge() // Commit offset
-   *   } catch (e: Exception) {
-   *     // Don't acknowledge - will be redelivered
-   *   }
-   * }
-   * ```
+   * Manual-ack: User controls when to commit via acknowledge().
    */
-  override fun pollWithAck(
+  private fun pollManualAck(
     topic: TopicConfig,
     bufferCapacity: Int
   ): Flow<AckableRecord<K, V>> = callbackFlow {
@@ -113,28 +111,27 @@ class SpringKafkaPoller<K : Any, V : Any>(
       return@callbackFlow
     }
 
-    val listener = AcknowledgingMessageListener { record, ack ->
+    val listener = AcknowledgingMessageListener<K, V> { record, ack ->
       if (ack != null) {
         val ackableRecord = AckableRecord(
           record = record,
           acknowledge = { ack.acknowledge() }
         )
-        // trySendBlocking will block when buffer is full, providing backpressure
         trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
           if (exception !is CancellationException) {
-            logger.error(exception) { "Failed to emit record with ack from topic ${topic.name}: ${record.key()}" }
+            logger.error(exception) { "Failed to emit record from topic ${topic.name}: ${record.key()}" }
           }
         }
       }
     }
 
-    val containerProps = createContainerPropertiesWithAck(topic, listener)
+    val containerProps = createManualAckContainerProperties(topic, listener)
     val container = createContainer(topic, containerProps)
     containers["${topic.name}-manual"] = container
 
     logger.info {
-      "SpringKafkaPoller: Starting manual-ack consumer for topic: ${topic.name} " +
-        "concurrency: ${container.concurrency}, bufferCapacity: $bufferCapacity"
+      "SpringKafkaPoller: Starting manual-ack consumer for topic: ${topic.name}, " +
+        "concurrency: ${container.concurrency}"
     }
     container.start()
 
@@ -161,13 +158,13 @@ class SpringKafkaPoller<K : Any, V : Any>(
 
   override fun isStopped(): Boolean = stopped.get()
 
-  private fun createContainerProperties(
+  private fun createAutoAckContainerProperties(
     topic: TopicConfig,
     listener: MessageListener<K, V>
   ): ContainerProperties = ContainerProperties(topic.name).also { props ->
     props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
 
-    // Map CommitStrategy to Spring Kafka AckMode for auto-ack consumers
+    // Map CommitStrategy to Spring Kafka AckMode
     when (val strategy = listenerConfig.commitStrategy) {
       is CommitStrategy.BySize -> {
         if (strategy.size == 1) {
@@ -191,21 +188,19 @@ class SpringKafkaPoller<K : Any, V : Any>(
     }
 
     props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
-    // Use sync commits for safety - ensures offsets are committed before continuing
-    props.isSyncCommits = true
-    props.syncCommitTimeout = Duration.ofSeconds(5)
+    props.isSyncCommits = listenerConfig.commitStrategy.syncCommits
+    props.syncCommitTimeout = Duration.ofMillis(listenerConfig.commitStrategy.syncCommitTimeout.inWholeMilliseconds)
     props.setMessageListener(listener)
     configureVirtualThreads(props, topic)
   }
 
-  private fun createContainerPropertiesWithAck(
+  private fun createManualAckContainerProperties(
     topic: TopicConfig,
     listener: AcknowledgingMessageListener<K, V>
   ): ContainerProperties = ContainerProperties(topic.name).also { props ->
     props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
     props.ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
     props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
-    // Use sync commits for manual ack - ensures exactly-once semantics
     props.isSyncCommits = true
     props.syncCommitTimeout = Duration.ofSeconds(5)
     props.setMessageListener(listener)
@@ -221,8 +216,9 @@ class SpringKafkaPoller<K : Any, V : Any>(
   private fun createContainer(
     topic: TopicConfig,
     containerProps: ContainerProperties
-  ): ConcurrentMessageListenerContainer<K, V> = ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
-    concurrency = topic.effectiveConcurrency(listenerConfig.concurrency)
-    errorHandler?.let { commonErrorHandler = it }
-  }
+  ): ConcurrentMessageListenerContainer<K, V> =
+    ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
+      concurrency = topic.effectiveConcurrency(listenerConfig.concurrency)
+      errorHandler?.let { commonErrorHandler = it }
+    }
 }

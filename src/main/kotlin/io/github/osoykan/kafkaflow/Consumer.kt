@@ -92,20 +92,9 @@ interface ConsumerManualAck<K, V> : Consumer<K, V> {
 /**
  * Acknowledgment handle for manual commit.
  */
-interface Acknowledgment {
+fun interface Acknowledgment {
   /**
    * Acknowledges the message, triggering offset commit.
    */
   fun acknowledge()
-}
-
-/**
- * Adapter to convert Spring Kafka Acknowledgment to our interface.
- */
-internal class SpringAcknowledgmentAdapter(
-  private val springAck: org.springframework.kafka.support.Acknowledgment
-) : Acknowledgment {
-  override fun acknowledge() {
-    springAck.acknowledge()
-  }
 }

@@ -2,6 +2,7 @@ package io.github.osoykan.kafkaflow
 
 import io.github.osoykan.kafkaflow.support.SharedKafka
 import io.github.osoykan.kafkaflow.support.TestHelpers
+import io.github.osoykan.kafkaflow.support.acknowledgeAndExtract
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.collections.shouldHaveSize
@@ -29,7 +30,11 @@ class ProduceConsumeIntegrationTests :
       val topicConfig = TopicConfig(name = topic)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(5).toList()
+        consumer
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(5)
+          .toList()
       }
 
       delay(1.seconds)
@@ -60,7 +65,11 @@ class ProduceConsumeIntegrationTests :
       val topicConfig = TopicConfig(name = topic)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(10).toList()
+        consumer
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(10)
+          .toList()
       }
 
       delay(1.seconds)
@@ -97,11 +106,19 @@ class ProduceConsumeIntegrationTests :
       val records2 = mutableListOf<String>()
 
       val job1 = async {
-        consumer1.consume(TopicConfig(topic1)).take(5).collect { records1.add(it.value()) }
+        consumer1
+          .consume(TopicConfig(topic1))
+          .acknowledgeAndExtract()
+          .take(5)
+          .collect { records1.add(it.value()) }
       }
 
       val job2 = async {
-        consumer2.consume(TopicConfig(topic2)).take(5).collect { records2.add(it.value()) }
+        consumer2
+          .consume(TopicConfig(topic2))
+          .acknowledgeAndExtract()
+          .take(5)
+          .collect { records2.add(it.value()) }
       }
 
       delay(1.seconds)
@@ -137,7 +154,11 @@ class ProduceConsumeIntegrationTests :
       val topicConfig = TopicConfig(name = topic)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(3).toList()
+        consumer
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(3)
+          .toList()
       }
 
       delay(1.seconds)
@@ -168,7 +189,11 @@ class ProduceConsumeIntegrationTests :
       val topicConfig = TopicConfig(name = topic)
 
       val consumeJob = async {
-        consumer.consume(topicConfig).take(1).toList()
+        consumer
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(1)
+          .toList()
       }
 
       delay(1.seconds)

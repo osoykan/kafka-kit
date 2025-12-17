@@ -351,20 +351,6 @@ class RetryableProcessor<K : Any, V : Any>(
   }
 
   /**
-   * Processes a record, acknowledging on success.
-   */
-  suspend fun <R> processWithAck(
-    record: AcknowledgingRecord<K, V>,
-    handler: suspend (ConsumerRecord<K, V>) -> R
-  ): ProcessingResult<R> {
-    val result = process(record.record, handler)
-    if (result is ProcessingResult.Success) {
-      record.acknowledgment.acknowledge()
-    }
-    return result
-  }
-
-  /**
    * Checks if a message has expired based on TTL settings.
    */
   private fun checkTtl(record: ConsumerRecord<K, V>): TtlCheckResult {

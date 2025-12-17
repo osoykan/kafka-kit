@@ -4,11 +4,13 @@ import io.github.osoykan.kafkaflow.FlowKafkaConsumer
 import io.github.osoykan.kafkaflow.FlowKafkaProducer
 import io.github.osoykan.kafkaflow.ListenerConfig
 import io.github.osoykan.kafkaflow.TopicConfig
+import io.github.osoykan.kafkaflow.poller.AckableRecord
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
@@ -63,21 +65,38 @@ object TestHelpers {
 
 /**
  * Collects a specific number of records from a flow with timeout.
+ * Automatically acknowledges each record.
  */
-suspend fun <K : Any, V : Any> Flow<ConsumerRecord<K, V>>.collectWithTimeout(
+suspend fun <K : Any, V : Any> Flow<AckableRecord<K, V>>.collectWithTimeout(
   count: Int,
   timeout: Duration = 30.seconds
 ): List<ConsumerRecord<K, V>> = withTimeout(timeout) {
-  take(count).toList()
+  take(count)
+    .map { ackable ->
+      ackable.acknowledge()
+      ackable.record
+    }.toList()
 }
 
 /**
- * Waits for a single record with timeout.
+ * Maps AckableRecord flow to ConsumerRecord flow, acknowledging each record.
  */
-suspend fun <K : Any, V : Any> Flow<ConsumerRecord<K, V>>.awaitFirst(
+fun <K : Any, V : Any> Flow<AckableRecord<K, V>>.acknowledgeAndExtract(): Flow<ConsumerRecord<K, V>> =
+  map { ackable ->
+    ackable.acknowledge()
+    ackable.record
+  }
+
+/**
+ * Waits for a single record with timeout.
+ * Automatically acknowledges the record.
+ */
+suspend fun <K : Any, V : Any> Flow<AckableRecord<K, V>>.awaitFirst(
   timeout: Duration = 30.seconds
 ): ConsumerRecord<K, V> = withTimeout(timeout) {
-  first()
+  val ackable = first()
+  ackable.acknowledge()
+  ackable.record
 }
 
 /**

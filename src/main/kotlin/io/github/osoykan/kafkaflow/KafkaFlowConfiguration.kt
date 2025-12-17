@@ -81,7 +81,8 @@ data class ConsumerConfig(
  *
  * @property concurrency Number of concurrent consumer threads/partitions
  * @property pollTimeout Poll timeout duration
- * @property commitStrategy Commit strategy for auto-ack consumers (default: PerRecord for predictability)
+ * @property commitStrategy Commit strategy for auto-ack consumers (default: PerRecord).
+ *   Also determines syncCommits and syncCommitTimeout.
  * @property idleBetweenPolls Idle time between polls
  */
 data class ListenerConfig(

@@ -2,13 +2,13 @@ package io.github.osoykan.kafkaflow
 
 import io.github.osoykan.kafkaflow.support.SharedKafka
 import io.github.osoykan.kafkaflow.support.TestHelpers
+import io.github.osoykan.kafkaflow.support.acknowledgeAndExtract
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.toList
 import kotlin.time.Duration.Companion.seconds
 
 class ErrorHandlingTests :
@@ -44,12 +44,16 @@ class ErrorHandlingTests :
       val errorHandler = createErrorHandler<String, String>()
       val consumerFactory = kafka.createStringConsumerFactory(groupId)
       val config = TestHelpers.testListenerConfig()
-      val consumer = FlowKafkaConsumer(consumerFactory, config, errorHandler)
+      val consumer = FlowKafkaConsumer(consumerFactory, config, errorHandler = errorHandler)
       val topicConfig = TopicConfig(name = topic)
 
       val records = mutableListOf<String>()
       val job = async {
-        consumer.consume(topicConfig).take(2).collect { records.add(it.value()) }
+        consumer
+          .consume(topicConfig)
+          .acknowledgeAndExtract()
+          .take(2)
+          .collect { records.add(it.value()) }
       }
 
       delay(1.seconds)
@@ -80,7 +84,7 @@ class ErrorHandlingTests :
       val topicConfig = TopicConfig(name = topic)
 
       val job = async {
-        consumer.consume(topicConfig).take(5).collect { record ->
+        consumer.consume(topicConfig).acknowledgeAndExtract().take(5).collect { record ->
           processedRecords.add(record.value())
         }
       }
