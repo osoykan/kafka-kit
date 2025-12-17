@@ -6,18 +6,14 @@ import io.ktor.util.*
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerConfig
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
-import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.annotation.EnableKafka
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory
-import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory
 import org.springframework.kafka.core.DefaultKafkaProducerFactory
 import org.springframework.kafka.core.KafkaTemplate
-import org.springframework.kafka.core.ProducerFactory
-import org.springframework.kafka.listener.ContainerProperties
 
 private val logger = KotlinLogging.logger {}
 
@@ -139,11 +135,14 @@ class SpringKafkaContextHolder internal constructor(
       // Register config as a bean
       beanFactory.registerSingleton("springKafkaConfig", config)
 
-      // Create and register the dynamic configuration class
-      register(DynamicKafkaConfiguration::class.java)
+      // Register default factories inline
+      registerDefaultFactories(beanFactory, config)
 
       // Register named factories
       registerNamedFactories(beanFactory, config)
+
+      // Enable Kafka listener processing
+      register(KafkaListenerConfiguration::class.java)
 
       // Register component scan configuration if packages specified
       val packages = config.getScanPackages()
@@ -161,6 +160,57 @@ class SpringKafkaContextHolder internal constructor(
     if (dependencyResolver !is NoOpDependencyResolver) {
       logger.info { "External DI resolver configured: ${dependencyResolver::class.simpleName}" }
     }
+  }
+
+  private fun registerDefaultFactories(beanFactory: FallbackBeanFactory, config: SpringKafkaConfig) {
+    // Create default consumer factory
+    val consumerProps = buildMap {
+      put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
+      put(ConsumerConfig.GROUP_ID_CONFIG, config.groupId)
+      put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, config.keyDeserializer.java)
+      put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, config.valueDeserializer.java)
+      put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, config.getConsumerSettings().autoOffsetReset)
+      put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, config.getConsumerSettings().enableAutoCommit)
+      put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.getConsumerSettings().maxPollRecords)
+      putAll(config.getAdditionalConsumerProps())
+    }
+    val consumerFactory = DefaultKafkaConsumerFactory<Any, Any>(consumerProps)
+    config.getConsumerFactoryCustomizer()?.invoke(consumerFactory)
+    beanFactory.registerSingleton("consumerFactory", consumerFactory)
+
+    // Create default producer factory
+    val producerProps = buildMap {
+      put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
+      put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, config.keySerializer.java)
+      put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, config.valueSerializer.java)
+      put(ProducerConfig.ACKS_CONFIG, config.getProducerSettings().acks)
+      put(ProducerConfig.RETRIES_CONFIG, config.getProducerSettings().retries)
+      put(ProducerConfig.COMPRESSION_TYPE_CONFIG, config.getProducerSettings().compression)
+      put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, config.getProducerSettings().idempotence)
+      putAll(config.getAdditionalProducerProps())
+    }
+    val producerFactory = DefaultKafkaProducerFactory<Any, Any>(producerProps)
+    config.getProducerFactoryCustomizer()?.invoke(producerFactory)
+    beanFactory.registerSingleton("producerFactory", producerFactory)
+
+    // Create default kafka template
+    val kafkaTemplate = KafkaTemplate(producerFactory)
+    beanFactory.registerSingleton("kafkaTemplate", kafkaTemplate)
+
+    // Create default listener container factory
+    // AckMode defaults to BATCH (commit after poll batch) - Spring's default
+    // For suspend functions, Spring auto-switches to MANUAL with out-of-order commits
+    val containerFactory = ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
+      setConsumerFactory(consumerFactory)
+      setConcurrency(config.getConsumerSettings().concurrency)
+      containerProperties.pollTimeout = config.getConsumerSettings().pollTimeout.inWholeMilliseconds
+      containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
+      config.getConsumerSettings().errorHandler?.let { setCommonErrorHandler(it) }
+    }
+    config.getContainerFactoryCustomizer()?.invoke(containerFactory)
+    beanFactory.registerSingleton("kafkaListenerContainerFactory", containerFactory)
+
+    logger.info { "Registered default Kafka factories (virtual threads enabled)" }
   }
 
   private fun registerNamedFactories(beanFactory: FallbackBeanFactory, config: SpringKafkaConfig) {
@@ -201,11 +251,12 @@ class SpringKafkaContextHolder internal constructor(
     beanFactory.registerSingleton(consumerFactoryName, consumerFactory)
 
     // Create listener container factory with virtual threads
+    // AckMode defaults to BATCH (commit after poll batch) - Spring's default
+    // For suspend functions, Spring auto-switches to MANUAL with out-of-order commits
     val containerFactory = ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
       setConsumerFactory(consumerFactory)
       setConcurrency(config.concurrency)
       containerProperties.pollTimeout = config.pollTimeout.inWholeMilliseconds
-      containerProperties.ackMode = ContainerProperties.AckMode.RECORD
       containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
 
       // Apply error handler if provided
@@ -310,78 +361,10 @@ class SpringKafkaContextHolder internal constructor(
 }
 
 /**
- * Dynamic Kafka configuration that uses SpringKafkaConfig.
- * Creates default consumer factory, producer factory, and templates.
+ * Minimal configuration to enable @KafkaListener processing.
+ * All factory beans are registered inline in SpringKafkaContextHolder.
  */
 @Configuration
 @EnableKafka
 @ComponentScan
-internal open class DynamicKafkaConfiguration {
-  @Bean
-  open fun consumerFactory(config: SpringKafkaConfig): ConsumerFactory<Any, Any> {
-    val factory = DefaultKafkaConsumerFactory<Any, Any>(
-      buildMap {
-        put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
-        put(ConsumerConfig.GROUP_ID_CONFIG, config.groupId)
-        put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, config.keyDeserializer.java)
-        put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, config.valueDeserializer.java)
-        put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, config.getConsumerSettings().autoOffsetReset)
-        put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, config.getConsumerSettings().enableAutoCommit)
-        put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.getConsumerSettings().maxPollRecords)
-        putAll(config.getAdditionalConsumerProps())
-      }
-    )
-
-    // Apply customizer if provided
-    config.getConsumerFactoryCustomizer()?.invoke(factory)
-
-    return factory
-  }
-
-  @Bean
-  open fun producerFactory(config: SpringKafkaConfig): ProducerFactory<Any, Any> {
-    val factory = DefaultKafkaProducerFactory<Any, Any>(
-      buildMap {
-        put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
-        put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, config.keySerializer.java)
-        put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, config.valueSerializer.java)
-        put(ProducerConfig.ACKS_CONFIG, config.getProducerSettings().acks)
-        put(ProducerConfig.RETRIES_CONFIG, config.getProducerSettings().retries)
-        put(ProducerConfig.COMPRESSION_TYPE_CONFIG, config.getProducerSettings().compression)
-        put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, config.getProducerSettings().idempotence)
-        putAll(config.getAdditionalProducerProps())
-      }
-    )
-
-    // Apply customizer if provided
-    config.getProducerFactoryCustomizer()?.invoke(factory)
-
-    return factory
-  }
-
-  @Bean
-  open fun kafkaTemplate(producerFactory: ProducerFactory<Any, Any>): KafkaTemplate<Any, Any> =
-    KafkaTemplate(producerFactory)
-
-  @Bean
-  open fun kafkaListenerContainerFactory(
-    consumerFactory: ConsumerFactory<Any, Any>,
-    config: SpringKafkaConfig
-  ): ConcurrentKafkaListenerContainerFactory<Any, Any> {
-    val factory = ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
-      setConsumerFactory(consumerFactory)
-      setConcurrency(config.getConsumerSettings().concurrency)
-      containerProperties.pollTimeout = config.getConsumerSettings().pollTimeout.inWholeMilliseconds
-      containerProperties.ackMode = ContainerProperties.AckMode.RECORD
-      containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
-
-      // Apply error handler if provided
-      config.getConsumerSettings().errorHandler?.let { setCommonErrorHandler(it) }
-    }
-
-    // Apply customizer if provided
-    config.getContainerFactoryCustomizer()?.invoke(factory)
-
-    return factory
-  }
-}
+internal open class KafkaListenerConfiguration
