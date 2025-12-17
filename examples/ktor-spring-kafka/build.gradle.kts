@@ -37,8 +37,8 @@ spotless {
 }
 
 dependencies {
-  // Spring Kafka (direct dependency, not kafka-flow)
-  implementation(libs.spring.kafka)
+  // Ktor Spring Kafka Plugin
+  implementation(project(":ktor-spring-kafka-plugin"))
 
   // Ktor Server
   implementation(libs.ktor.server.core)

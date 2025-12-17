@@ -8,10 +8,14 @@ import com.sksamuel.hoplite.ExperimentalHoplite
 import com.sksamuel.hoplite.addCommandLineSource
 import com.sksamuel.hoplite.addResourceSource
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.github.osoykan.ktor.springkafka.SpringKafka
 import io.github.osoykan.springkafka.example.api.configureRouting
 import io.github.osoykan.springkafka.example.config.AppConfig
-import io.github.osoykan.springkafka.example.infra.configureKafkaConsumers
-import io.github.osoykan.springkafka.example.infra.kafkaModule
+import io.github.osoykan.springkafka.example.domain.NotificationService
+import io.github.osoykan.springkafka.example.domain.OrderRepository
+import io.github.osoykan.springkafka.example.infra.JacksonDeserializer
+import io.github.osoykan.springkafka.example.infra.JacksonSerializer
+import io.github.osoykan.springkafka.example.infra.KoinDependencyResolver
 import io.ktor.http.*
 import io.ktor.serialization.jackson.*
 import io.ktor.server.application.*
@@ -23,6 +27,7 @@ import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.response.*
 import org.koin.core.module.Module
 import org.koin.dsl.module
+import org.koin.ktor.ext.getKoin
 import org.koin.ktor.plugin.Koin
 
 private val logger = KotlinLogging.logger {}
@@ -35,10 +40,10 @@ private val logger = KotlinLogging.logger {}
  *
  * Key features:
  * - Ktor as the web framework and application container
- * - Koin as the DI container (instead of Spring DI)
- * - Spring Kafka for Kafka consumer/producer functionality
+ * - Koin as the DI container (optional, for non-Kafka beans)
+ * - Spring Kafka plugin for Kafka consumer/producer functionality
  * - Kotlin suspend functions as message handlers
- * - Manual acknowledgment for proper offset management with async handlers
+ * - Auto-discovery of @KafkaListener consumers via component scanning
  *
  * @see <a href="https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html">Spring Kafka Async Returns</a>
  */
@@ -78,13 +83,55 @@ fun Application.appModule(
   config: AppConfig,
   applicationOverrides: () -> Module = { module { } }
 ) {
-  // Install Koin DI
+  // Install Koin FIRST - Spring Kafka consumers will use Koin-managed services
   install(Koin) {
     modules(
-      module { single { config } },
-      kafkaModule(config),
+      module {
+        single { config }
+
+        // Domain services - these will be injected into Spring Kafka consumers via DependencyResolver!
+        // Spring beans (EventMetricsService, EventValidator) are discovered separately by Spring
+        single { OrderRepository() }
+        single { NotificationService() }
+      },
       applicationOverrides()
     )
+  }
+
+  // Install Spring Kafka plugin - with dependency bridge to Koin!
+  install(SpringKafka) {
+    bootstrapServers = config.kafka.bootstrapServers
+    groupId = config.kafka.groupId
+
+    // Bridge: Allow Spring Kafka consumers to inject Koin-managed beans
+    dependencyResolver = KoinDependencyResolver(getKoin())
+
+    // Custom serializers/deserializers for domain events
+    valueSerializer = JacksonSerializer::class
+    valueDeserializer = JacksonDeserializer::class
+
+    // Auto-discover consumers and Spring services
+    consumerPackages(
+      "io.github.osoykan.springkafka.example.consumers",
+      "io.github.osoykan.springkafka.example.infra"
+    )
+
+    consumer {
+      concurrency = config.kafka.consumer.concurrency
+      pollTimeout = config.kafka.consumer.pollTimeout
+    }
+
+    producer {
+      acks = config.kafka.producer.acks
+      retries = config.kafka.producer.retries
+      compression = config.kafka.producer.compression
+    }
+
+    // Add interceptors for Stove testing if configured
+    if (config.kafka.interceptorClasses.isNotBlank()) {
+      consumerProperty("interceptor.classes", listOf(config.kafka.interceptorClasses))
+      producerProperty("interceptor.classes", listOf(config.kafka.interceptorClasses))
+    }
   }
 
   // Install plugins
@@ -108,9 +155,6 @@ fun Application.appModule(
 
   // Configure routes
   configureRouting()
-
-  // Configure Kafka consumers lifecycle
-  configureKafkaConsumers()
 }
 
 /**

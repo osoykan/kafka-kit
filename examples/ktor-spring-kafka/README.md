@@ -1,185 +1,169 @@
 # Ktor + Spring Kafka Example
 
-This example demonstrates how to use **Spring Kafka** with **Ktor** as the web framework and **Koin** as the primary DI container. It showcases the native Kotlin suspend function support in [Spring Kafka 3.2+](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html) using `@KafkaListener` annotations.
+This example demonstrates how to use **Spring Kafka** with **Ktor** using a custom Ktor plugin. It showcases the native Kotlin suspend function support in [Spring Kafka 3.2+](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html).
 
 ## Key Features
 
-- **Ktor** as the web framework (not Spring Boot)
-- **Koin** as the primary DI container
-- **Spring Kafka** with `@KafkaListener` annotation support
-- **Native Kotlin suspend function support** - Spring Kafka handles them automatically
-- **Minimal Spring context** - only for Kafka, not for the entire app
-- **Stove** for E2E testing
+- **Ktor Plugin** - `install(SpringKafka) { ... }` for idiomatic configuration
+- **Auto-discovery** - Consumers with `@KafkaListener` are found via component scanning
+- **Native suspend support** - Spring Kafka handles suspend functions automatically
+- **Lifecycle management** - Starts/stops with Ktor application
 
-## Architecture
+## Usage
 
+```kotlin
+fun Application.module() {
+  // Install Spring Kafka plugin
+  install(SpringKafka) {
+    bootstrapServers = "localhost:9092"
+    groupId = "my-consumer-group"
+    
+    // Auto-discover consumers in these packages
+    consumerPackages("com.example.consumers")
+    
+    consumer {
+      concurrency = 4
+      pollTimeout = 1.seconds
+    }
+    
+    producer {
+      acks = "all"
+      retries = 3
+    }
+  }
+  
+  // Use KafkaTemplate in routes
+  routing {
+    post("/send") {
+      val template = application.kafkaTemplate<String, MyEvent>()
+      template.send("my-topic", "key", event).await()
+    }
+  }
+}
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Ktor Application                        │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────────────┐  │
-│  │   Routes    │  │    Koin DI   │  │  SpringKafkaContext   │  │
-│  │  (HTTP API) │  │   (Primary)  │  │  (Kafka-only Spring)  │  │
-│  └─────────────┘  └──────────────┘  └───────────────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│              Spring ApplicationContext (Kafka only)             │
-│  ┌─────────────────────────┐  ┌─────────────────────────────┐  │
-│  │    @KafkaListener       │  │      KafkaTemplate          │  │
-│  │    Consumers            │  │      (Producer)             │  │
-│  │    (suspend functions)  │  │                             │  │
-│  └─────────────────────────┘  └─────────────────────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│                       Apache Kafka                              │
-└─────────────────────────────────────────────────────────────────┘
-```
 
-## Native Suspend Function Support
+## Creating Consumers
 
-Spring Kafka 3.2+ natively supports Kotlin suspend functions with `@KafkaListener`:
+Just add `@Component` and `@KafkaListener` annotations - they're auto-discovered:
 
 ```kotlin
 @Component
-open class OrderCreatedConsumer {
+open class OrderConsumer {
   
-  @KafkaListener(topics = ["example.orders.created"])
+  @KafkaListener(topics = ["orders"])
   open suspend fun consume(record: ConsumerRecord<String, DomainEvent>) {
     val event = record.value() as OrderCreatedEvent
     
     // This is a suspend function - Spring Kafka handles it natively:
     // - Runs in a coroutine context
-    // - AckMode automatically set to MANUAL for async handlers
     // - Acknowledges only after successful completion
-    // - Properly propagates exceptions
     
-    validateOrder(event)
-    processOrder(event)  // Can call other suspend functions
+    processOrder(event)
+  }
+  
+  private suspend fun processOrder(event: OrderCreatedEvent) {
+    // Can call other suspend functions, use async I/O, etc.
   }
 }
 ```
 
-### How Spring Kafka Handles Suspend Functions
+## Plugin Configuration Options
 
-From the [Spring Kafka documentation](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html):
+```kotlin
+install(SpringKafka) {
+  // Required
+  bootstrapServers = "localhost:9092"
+  groupId = "my-group"
+  
+  // Package scanning
+  consumerPackages("com.example.consumers", "com.example.handlers")
+  
+  // Serialization (defaults to Jackson)
+  keySerializer = StringSerializer::class
+  valueSerializer = JacksonSerializer::class
+  keyDeserializer = StringDeserializer::class
+  valueDeserializer = JacksonDeserializer::class
+  
+  // Consumer settings
+  consumer {
+    concurrency = 4
+    pollTimeout = 1.seconds
+    autoOffsetReset = "earliest"
+    enableAutoCommit = false
+    maxPollRecords = 500
+  }
+  
+  // Producer settings
+  producer {
+    acks = "all"
+    retries = 3
+    compression = "lz4"
+    idempotence = true
+  }
+  
+  // Additional properties
+  consumerProperty("session.timeout.ms", 30000)
+  producerProperty("batch.size", 16384)
+}
+```
 
-> Starting with version 3.2, `@KafkaListener` (and `@KafkaHandler`) methods can be specified with asynchronous return types, letting the reply be sent asynchronously. Return types include `CompletableFuture<?>`, `Mono<?>` and Kotlin `suspend` functions.
->
-> The AckMode will be automatically set to MANUAL and enable out-of-order commits when async return types are detected; instead, the asynchronous completion will ack when the async operation completes.
+## Extension Functions
+
+```kotlin
+// Get KafkaTemplate
+val template = application.kafkaTemplate<String, MyEvent>()
+
+// Check if Kafka is running
+val running = application.isSpringKafkaRunning()
+```
+
+## How Suspend Functions Work
+
+Per [Spring Kafka 3.2+ documentation](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html):
+
+> `@KafkaListener` methods can be specified with asynchronous return types, including Kotlin `suspend` functions.
+> 
+> The AckMode will be automatically set to MANUAL when async return types are detected; the asynchronous completion will ack when the async operation completes.
+
+The plugin creates a minimal Spring `ApplicationContext` that:
+1. Enables `@EnableKafka` for annotation processing
+2. Uses `@ComponentScan` to find `@Component` consumers
+3. Spring handles the suspend function → coroutine bridge automatically
 
 ## Project Structure
 
 ```
-src/main/kotlin/io/github/osoykan/springkafka/example/
-├── ExampleKtorApp.kt           # Ktor application entry point
-├── api/
-│   └── Routes.kt               # HTTP endpoints
-├── config/
-│   └── AppConfig.kt            # Configuration classes
+src/main/kotlin/.../
+├── ExampleKtorApp.kt           # Ktor app with SpringKafka plugin
+├── api/Routes.kt               # HTTP endpoints using kafkaTemplate()
 ├── consumers/
-│   ├── OrderConsumer.kt        # @KafkaListener with suspend function
-│   ├── PaymentConsumer.kt      # @KafkaListener with suspend function
-│   └── NotificationConsumer.kt # @KafkaListener with suspend function
-├── domain/
-│   └── Events.kt               # Domain event classes
+│   ├── OrderConsumer.kt        # @Component + @KafkaListener suspend
+│   ├── PaymentConsumer.kt      # @Component + @KafkaListener suspend  
+│   └── NotificationConsumer.kt # @Component + @KafkaListener suspend
+├── domain/Events.kt            # Event classes
 └── infra/
     ├── JacksonSerde.kt         # Kafka serialization
-    ├── KafkaModule.kt          # Koin module for Kafka
-    └── SpringKafkaContext.kt   # Minimal Spring context for Kafka
+    └── SpringKafkaPlugin.kt    # The Ktor plugin
 ```
 
-## SpringKafkaContext
-
-The `SpringKafkaContext` class creates a minimal Spring `ApplicationContext` specifically for Kafka:
-
-```kotlin
-class SpringKafkaContext(private val config: AppConfig) {
-  private lateinit var applicationContext: AnnotationConfigApplicationContext
-
-  fun start() {
-    applicationContext = AnnotationConfigApplicationContext().apply {
-      register(KafkaConfiguration::class.java)
-      beanFactory.registerSingleton("appConfig", config)
-      
-      // Register consumers - Spring discovers @KafkaListener methods
-      register(OrderCreatedConsumer::class.java)
-      register(PaymentConsumer::class.java)
-      register(NotificationConsumer::class.java)
-      
-      refresh()  // Starts all listener containers
-    }
-  }
-
-  fun stop() {
-    applicationContext.close()
-  }
-}
-```
-
-## Running the Example
-
-### Prerequisites
-
-- JDK 21+
-- Docker (for Kafka in tests)
-
-### Run the Application
+## Running
 
 ```bash
-# From the project root
+# Run application
 ./gradlew :examples:ktor-spring-kafka:run
-```
 
-### Run Tests
-
-```bash
-# From the project root
+# Run tests
 ./gradlew :examples:ktor-spring-kafka:test
 ```
 
-## Configuration
+## Dependencies
 
-See `application.yaml`:
-
-```yaml
-server:
-  port: 8080
-  host: "0.0.0.0"
-
-kafka:
-  bootstrap-servers: "localhost:9092"
-  group-id: "ktor-spring-kafka-example"
-  
-  consumer:
-    enabled: true
-    concurrency: 4
-    poll-timeout: "1s"
-```
-
-## API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check with Kafka status |
-| `POST /api/test/orders/success` | Produce a valid order |
-| `POST /api/test/orders/fail-validation` | Produce order that fails validation |
-| `POST /api/test/payments` | Produce a payment |
-| `POST /api/test/notifications` | Produce a notification |
-
-## Comparison with kafka-flow Example
-
-| Feature | ktor-spring-kafka | ktor-kafka-flow |
-|---------|-------------------|-----------------|
-| Framework | Ktor | Ktor |
-| Primary DI | Koin | Koin |
-| Kafka Integration | Spring Kafka (direct) | kafka-flow (wrapper) |
-| Consumer Pattern | @KafkaListener annotation | Custom @KafkaTopic annotation |
-| Suspend Support | Native (Spring Kafka 3.2+) | Built-in via Flows |
-| Retry Logic | Manual | Built-in |
-| Metrics | Manual | Built-in |
-| DLT Support | Manual | Built-in |
+The plugin requires:
+- `spring-kafka` - Spring Kafka core
+- `kotlinx-coroutines-reactor` - Required for suspend function support
 
 ## References
 
 - [Spring Kafka Async Returns](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html)
 - [Spring Kafka Documentation](https://docs.spring.io/spring-kafka/reference/)
-- [Ktor Documentation](https://ktor.io/docs/)
-- [Koin Documentation](https://insert-koin.io/)
+- [Ktor Plugins](https://ktor.io/docs/server-create-a-plugin.html)

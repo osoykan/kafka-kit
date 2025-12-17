@@ -1,14 +1,16 @@
 package io.github.osoykan.springkafka.example.api
 
+import io.github.osoykan.ktor.springkafka.isSpringKafkaRunning
+import io.github.osoykan.ktor.springkafka.kafkaTemplate
+import io.github.osoykan.ktor.springkafka.springKafkaBean
 import io.github.osoykan.springkafka.example.domain.*
-import io.github.osoykan.springkafka.example.infra.SpringKafkaContext
+import io.github.osoykan.springkafka.example.infra.EventMetricsService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.future.await
 import org.koin.ktor.ext.inject
-import org.springframework.kafka.core.KafkaTemplate
 import java.math.BigDecimal
 import java.util.*
 
@@ -16,8 +18,15 @@ import java.util.*
  * Configure HTTP routes for the example application.
  */
 fun Application.configureRouting() {
-  val kafkaTemplate by inject<KafkaTemplate<String, DomainEvent>>()
-  val springKafkaContext by inject<SpringKafkaContext>()
+  // Get KafkaTemplate from Spring Kafka plugin
+  val kafkaTemplate = kafkaTemplate<String, DomainEvent>()
+
+  // Get Spring-managed service from Spring context
+  val eventMetricsService = springKafkaBean<EventMetricsService>()
+
+  // Get Koin-managed services
+  val orderRepository by inject<OrderRepository>()
+  val notificationService by inject<NotificationService>()
 
   routing {
     // Health check
@@ -25,15 +34,33 @@ fun Application.configureRouting() {
       call.respondText("Spring Kafka Ktor Example - Running!")
     }
 
-    // Health endpoint with consumer status
+    // Health endpoint with Kafka status
     get("/health") {
       val status = mapOf(
         "status" to "UP",
         "kafka" to mapOf(
-          "running" to springKafkaContext.isRunning()
+          "running" to application.isSpringKafkaRunning()
         )
       )
       call.respond(status)
+    }
+
+    // Metrics endpoint - demonstrates accessing Spring-managed and Koin-managed services
+    get("/metrics") {
+      val metrics = mapOf(
+        "spring" to mapOf(
+          "source" to "Spring Context (@Service)",
+          "eventMetrics" to eventMetricsService.getStats()
+        ),
+        "koin" to mapOf(
+          "source" to "Koin (via DependencyResolver bridge)",
+          "orderRepository" to mapOf("orderCount" to orderRepository.count()),
+          "notificationService" to mapOf(
+            "sentNotifications" to notificationService.getSentNotifications().size
+          )
+        )
+      )
+      call.respond(metrics)
     }
 
     // ─────────────────────────────────────────────────────────────

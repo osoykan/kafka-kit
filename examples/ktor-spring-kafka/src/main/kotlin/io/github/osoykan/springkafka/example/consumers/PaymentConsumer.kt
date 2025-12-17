@@ -13,14 +13,17 @@ private val logger = KotlinLogging.logger {}
 /**
  * Example payment consumer using Spring Kafka's @KafkaListener with Kotlin suspend function.
  *
- * This consumer shows how to handle payments with proper async processing.
- * The suspend function allows for non-blocking I/O operations like
- * calling payment gateways or updating databases.
+ * **Key Feature Demonstration:**
+ * This consumer injects [NotificationService] which is managed by **Koin**,
+ * showing how the dependency bridge works for multiple consumers.
  *
  * @see <a href="https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html">Async Returns</a>
  */
 @Component
-class PaymentConsumer {
+class PaymentConsumer(
+  // NotificationService is managed by Koin and automatically injected via DependencyResolver!
+  private val notificationService: NotificationService
+) {
   /**
    * Process a payment event.
    *
@@ -37,6 +40,9 @@ class PaymentConsumer {
 
     // Process payment - can call async payment gateway here
     processPayment(event)
+
+    // Send payment confirmation (Koin-managed service!)
+    notificationService.sendPaymentConfirmation(event)
 
     logger.info { "Payment processed successfully: ${event.paymentId}" }
   }

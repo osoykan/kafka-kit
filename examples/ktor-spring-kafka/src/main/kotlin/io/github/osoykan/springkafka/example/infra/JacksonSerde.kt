@@ -1,13 +1,10 @@
 package io.github.osoykan.springkafka.example.infra
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.SerializationFeature
+import com.fasterxml.jackson.databind.*
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.github.osoykan.springkafka.example.domain.DomainEvent
-import org.apache.kafka.common.serialization.Deserializer
-import org.apache.kafka.common.serialization.Serializer
+import org.apache.kafka.common.serialization.*
 
 /**
  * Configured Jackson ObjectMapper for the example application.
@@ -30,9 +27,9 @@ class JacksonSerializer<T> : Serializer<T> {
  *
  * Uses @JsonTypeInfo on DomainEvent to handle polymorphic deserialization.
  */
-class JacksonDeserializer : Deserializer<DomainEvent> {
+class JacksonDeserializer : Deserializer<Any> {
   override fun deserialize(
     topic: String,
     data: ByteArray
-  ): DomainEvent = data.let { objectMapper.readValue(it, DomainEvent::class.java) }
+  ): Any = data.let { objectMapper.readValue(it, Any::class.java) }
 }
