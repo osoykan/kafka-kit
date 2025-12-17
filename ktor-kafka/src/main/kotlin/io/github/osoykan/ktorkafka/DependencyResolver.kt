@@ -8,6 +8,20 @@ import kotlin.reflect.KClass
  * When Spring cannot find a bean in its context, it falls back to this resolver.
  * Implement this interface to integrate your DI container (Koin, Kodein, etc.).
  *
+ * ## Important: Singleton Scope Required
+ *
+ * **Only singleton-scoped beans should be resolved for Kafka listeners.**
+ *
+ * Kafka listeners are singletons - they're created once and live for the application
+ * lifetime. If a listener depends on a scoped bean (request, session, etc.), that
+ * bean is captured at construction time and never refreshed, leading to:
+ * - Stale state across messages
+ * - Thread safety issues
+ * - Resource leaks
+ *
+ * Implement [isSingleton] to enable scope validation. If a non-singleton is resolved,
+ * a warning is logged. For scoped dependencies, use a factory/provider pattern instead.
+ *
  * ## Koin Example
  *
  * ```kotlin
@@ -23,33 +37,13 @@ import kotlin.reflect.KClass
  *
  *   override fun canResolve(type: KClass<*>): Boolean =
  *     koin.getOrNull(type) != null
- * }
  *
- * // Usage
- * install(Koin) {
- *   modules(appModule)
- * }
- *
- * install(SpringKafka) {
- *   dependencyResolver = KoinResolver(getKoin())
- * }
- * ```
- *
- * ## Kodein Example
- *
- * ```kotlin
- * class KodeinResolver(private val di: DI) : DependencyResolver {
- *   override fun <T : Any> resolve(type: KClass<T>): T? =
- *     di.instanceOrNull(type.java)
- *
- *   override fun <T : Any> resolve(type: KClass<T>, name: String): T? =
- *     di.instanceOrNull(tag = name, type = type.java)
- *
- *   override fun <T : Any> resolveAll(type: KClass<T>): List<T> =
- *     di.allInstances(type.java)
- *
- *   override fun canResolve(type: KClass<*>): Boolean =
- *     resolve(type) != null
+ *   override fun isSingleton(type: KClass<*>): Boolean {
+ *     // Koin: check if definition is a singleton
+ *     val definition = koin.getScope(ScopeID.ROOT).beanRegistry
+ *       .getAllDefinitions().find { it.primaryType == type }
+ *     return definition?.kind == Kind.Singleton
+ *   }
  * }
  * ```
  *
@@ -58,10 +52,12 @@ import kotlin.reflect.KClass
  * 1. Spring Kafka listener needs a dependency (e.g., `OrderRepository`)
  * 2. Spring first looks in its own context
  * 3. If not found, Spring calls `dependencyResolver.resolve(OrderRepository::class)`
- * 4. Your resolver queries Koin/Kodein/etc. and returns the instance
- * 5. Spring injects it into your `@KafkaListener` consumer
+ * 4. Resolver checks [isSingleton] - warns if non-singleton
+ * 5. Your resolver queries Koin/Kodein/etc. and returns the instance
+ * 6. Spring injects it into your `@KafkaListener` consumer
  *
- * For `List<T>` dependencies, Spring calls `resolveAll()` to get all instances.
+ * **Note:** Resolved beans are NOT registered as Spring singletons to avoid
+ * double ownership. The external DI container remains the sole owner.
  */
 interface DependencyResolver {
   /**
@@ -98,6 +94,20 @@ interface DependencyResolver {
    * @return true if this resolver can provide the dependency
    */
   fun canResolve(type: KClass<*>): Boolean
+
+  /**
+   * Check if the dependency is a singleton in the external DI container.
+   *
+   * Kafka listeners are singletons, so they should only depend on singleton beans.
+   * Non-singleton dependencies (request-scoped, session-scoped, etc.) will be
+   * captured at listener construction time and never refreshed.
+   *
+   * Override this to enable scope validation. Default returns true (assumes singleton).
+   *
+   * @param type The class to check
+   * @return true if the dependency is singleton-scoped, false otherwise
+   */
+  fun isSingleton(type: KClass<*>): Boolean = true
 }
 
 /**

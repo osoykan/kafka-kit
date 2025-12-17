@@ -33,8 +33,8 @@ class FallbackBeanFactoryTest :
           resolved.connectionString shouldBe "test-db"
         }
 
-        it("should cache resolved beans as singletons") {
-          // Given: A resolver with a service
+        it("should return same instance when resolver provides singleton") {
+          // Given: A resolver with a singleton service
           val service = TestService("singleton-test")
           val resolver = MapDependencyResolver(
             TestService::class to service
@@ -45,7 +45,8 @@ class FallbackBeanFactoryTest :
           val first = beanFactory.getBean(TestService::class.java)
           val second = beanFactory.getBean(TestService::class.java)
 
-          // Then: Both should be the same instance
+          // Then: Both should be the same instance (because resolver returns same instance)
+          // Note: Bean is NOT cached in Spring, resolver is called each time
           first shouldBe second
           (first === second) shouldBe true
         }
@@ -174,16 +175,17 @@ class FallbackBeanFactoryTest :
           resolved.size shouldBe 0
         }
 
-        it("should cache externally resolved beans from getBeansOfType") {
+        it("should track externally resolved beans from getBeansOfType") {
           // Given: A resolver with handlers
-          val handlers = listOf(TestHandler("cached1"), TestHandler("cached2"))
+          val handlers = listOf(TestHandler("tracked1"), TestHandler("tracked2"))
           val resolver = ListDependencyResolver(handlers)
           val beanFactory = FallbackBeanFactory(resolver)
 
           // When: We resolve via getBeansOfType
           beanFactory.getBeansOfType(TestHandler::class.java)
 
-          // Then: Beans should be registered as singletons
+          // Then: Beans should be tracked (for containsBean) but NOT registered as Spring singletons
+          // External DI container remains the sole owner
           beanFactory.containsBean("testHandler0") shouldBe true
           beanFactory.containsBean("testHandler1") shouldBe true
         }
