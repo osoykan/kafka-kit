@@ -256,7 +256,7 @@ fun main() {
             dependencyResolver = KoinDependencyResolver(getKoin())
             
             // Scan for @KafkaListener consumers
-            consumerPackages("com.example.consumers")
+            scanPackages("com.example.consumers")
             
             // Configure consumers
             consumer {
