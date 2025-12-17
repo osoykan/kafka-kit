@@ -60,7 +60,6 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
 
   private var running = false
 
-  // INTERNAL: RetryableProcessor with all features - consumer doesn't know about this
   protected val retryProcessor = RetryableProcessor(
     kafkaTemplate = kafkaTemplate,
     policy = config.retry,
@@ -72,13 +71,6 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   override val topics: List<String>
     get() = listOf(config.topic.name, config.retryTopic)
 
-  /**
-   * Gets the effective processing concurrency for a topic.
-   * Processing concurrency controls how many records are processed in parallel.
-   */
-  protected fun effectiveConcurrency(topicConfig: TopicConfig): Int =
-    topicConfig.effectiveConcurrency(listenerConfig.concurrency)
-
   override fun start() {
     if (running) {
       log.warn { "Consumer already running" }
@@ -88,61 +80,65 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
     log.info { "Starting consumer for topic: ${config.topic.name}" }
     running = true
 
-    startMainTopicConsumer()
-    startRetryTopicConsumer()
+    launchConsumer(config.topic)
+    launchConsumer(TopicConfig(name = config.retryTopic))
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun launchConsumer(topicConfig: TopicConfig): Job {
+    val concurrency = topicConfig.effectiveConcurrency(listenerConfig.concurrency)
+    log.info { "Starting consumer for ${topicConfig.name} with processing concurrency: $concurrency" }
+
+    return scope.launch {
+      flowConsumer
+        .consume(topicConfig)
+        .catch { e ->
+          log.error(e) { "Stream error on topic: ${topicConfig.name}" }
+          metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
+        }.flatMapMerge(concurrency) { ackRecord ->
+          flow { emit(processRecord(ackRecord, topicConfig.name)) }
+        }.collect()
+    }
+  }
+
+  private suspend fun processRecord(ackRecord: AckableRecord<K, V>, topic: String) {
+    metrics.recordConsumed(topic, consumerName, ackRecord.record.partition())
+
+    val startTime = System.nanoTime()
+    val result = handleRecord(ackRecord)
+    val duration = (System.nanoTime() - startTime).nanoseconds
+
+    logResult(result, topic, duration)
   }
 
   /**
-   * Start consuming from the main topic. Subclasses implement specific flow handling.
+   * Process a single record. Subclasses implement specific consumer invocation.
    */
-  protected abstract fun startMainTopicConsumer(): Job
+  protected abstract suspend fun handleRecord(ackRecord: AckableRecord<K, V>): ProcessingResult<*>
 
-  /**
-   * Start consuming from the retry topic. Subclasses implement specific flow handling.
-   */
-  protected fun startRetryTopicConsumer(): Job = launchRetryConsumer(TopicConfig(name = config.retryTopic))
+  private fun logResult(result: ProcessingResult<*>, topic: String, duration: Duration) {
+    when (result) {
+      is ProcessingResult.Success -> {
+        metrics.recordProcessingSuccess(topic, consumerName, duration)
+        log.debug { "Successfully processed record from $topic" }
+      }
 
-  /**
-   * Launch retry topic consumer. Subclasses override for specific handling.
-   */
-  protected abstract fun launchRetryConsumer(topicConfig: TopicConfig): Job
+      is ProcessingResult.SentToRetryTopic -> {
+        log.warn { "Record sent to retry topic: ${result.topic} (attempt ${result.attempt})" }
+      }
 
-  /**
-   * Handle the processing result with logging and metrics.
-   * Common result handling extracted to avoid duplication.
-   *
-   * @return true if the record was successfully handled (success, retry, or DLT)
-   */
-  protected fun handleProcessingResult(
-    result: ProcessingResult<*>,
-    topic: String,
-    duration: Duration
-  ): Boolean = when (result) {
-    is ProcessingResult.Success -> {
-      metrics.recordProcessingSuccess(topic, consumerName, duration)
-      log.debug { "Successfully processed record from $topic" }
-      true
-    }
+      is ProcessingResult.SentToDlt -> {
+        log.error { "Record sent to DLT: ${result.topic} - ${result.reason}" }
+      }
 
-    is ProcessingResult.SentToRetryTopic -> {
-      log.warn { "Record sent to retry topic: ${result.topic} (attempt ${result.attempt})" }
-      true
-    }
+      is ProcessingResult.Expired -> {
+        log.warn { "Record expired and sent to DLT: ${result.topic} - ${result.reason}" }
+      }
 
-    is ProcessingResult.SentToDlt -> {
-      log.error { "Record sent to DLT: ${result.topic} - ${result.reason}" }
-      true
-    }
-
-    is ProcessingResult.Expired -> {
-      log.warn { "Record expired and sent to DLT: ${result.topic} - ${result.reason}" }
-      true
-    }
-
-    is ProcessingResult.Failed -> {
-      log.error(result.exception) { "Failed to process/send record" }
-      metrics.recordProcessingFailure(topic, consumerName, result.exception)
-      false
+      is ProcessingResult.Failed -> {
+        log.error(result.exception) { "Failed to process/send record" }
+        metrics.recordProcessingFailure(topic, consumerName, result.exception)
+      }
     }
   }
 
@@ -163,9 +159,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
 
 /**
  * Supervisor for auto-ack consumers.
- *
- * Uses CommitStrategy-based ack mode. Spring Kafka handles commits automatically.
- * Consumer only implements consume() - nothing else.
+ * Spring Kafka handles commits automatically based on CommitStrategy.
  */
 class ConsumerAutoAckSupervisor<K : Any, V : Any>(
   private val consumer: ConsumerAutoAck<K, V>,
@@ -175,48 +169,13 @@ class ConsumerAutoAckSupervisor<K : Any, V : Any>(
   listenerConfig: ListenerConfig,
   metrics: KafkaFlowMetrics = NoOpMetrics
 ) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, listenerConfig, metrics, consumer.consumerName) {
-  override fun startMainTopicConsumer(): Job {
-    val concurrency = effectiveConcurrency(config.topic)
-    log.info { "Starting main topic consumer for ${config.topic.name} with processing concurrency: $concurrency" }
-    return launchConcurrentConsumer(config.topic, concurrency)
-  }
-
-  override fun launchRetryConsumer(topicConfig: TopicConfig): Job {
-    val concurrency = effectiveConcurrency(topicConfig)
-    log.info { "Starting retry topic consumer for ${topicConfig.name} with processing concurrency: $concurrency" }
-    return launchConcurrentConsumer(topicConfig, concurrency)
-  }
-
-  @OptIn(ExperimentalCoroutinesApi::class)
-  private fun launchConcurrentConsumer(topicConfig: TopicConfig, concurrency: Int): Job = scope.launch {
-    flowConsumer
-      .consume(topicConfig)
-      .catch { e ->
-        log.error(e) { "Stream error on topic: ${topicConfig.name}" }
-        metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
-      }.flatMapMerge(concurrency) { ackRecord ->
-        flow { emit(handleRecord(ackRecord, topicConfig.name)) }
-      }.collect()
-  }
-
-  /**
-   * Process record. Spring Kafka handles commits based on CommitStrategy.
-   */
-  private suspend fun handleRecord(ackRecord: AckableRecord<K, V>, topic: String) {
-    metrics.recordConsumed(topic, consumerName, ackRecord.record.partition())
-
-    val startTime = System.nanoTime()
-    val result = retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec) }
-    val duration = (System.nanoTime() - startTime).nanoseconds
-
-    handleProcessingResult(result, topic, duration)
-  }
+  override suspend fun handleRecord(ackRecord: AckableRecord<K, V>): ProcessingResult<*> =
+    retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec) }
 }
 
 /**
  * Supervisor for manual-ack consumers.
- *
- * Uses MANUAL_IMMEDIATE mode - user controls when to acknowledge.
+ * User controls when to acknowledge via the Acknowledgment handle.
  */
 class ConsumerManualAckSupervisor<K : Any, V : Any>(
   private val consumer: ConsumerManualAck<K, V>,
@@ -226,41 +185,8 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
   listenerConfig: ListenerConfig,
   metrics: KafkaFlowMetrics = NoOpMetrics
 ) : AbstractConsumerSupervisor<K, V>(config, flowConsumer, kafkaTemplate, listenerConfig, metrics, consumer.consumerName) {
-  override fun startMainTopicConsumer(): Job {
-    val concurrency = effectiveConcurrency(config.topic)
-    log.info { "Starting main topic consumer for ${config.topic.name} with processing concurrency: $concurrency" }
-    return launchConcurrentConsumer(config.topic, concurrency)
-  }
-
-  override fun launchRetryConsumer(topicConfig: TopicConfig): Job {
-    val concurrency = effectiveConcurrency(topicConfig)
-    log.info { "Starting retry topic consumer for ${topicConfig.name} with processing concurrency: $concurrency" }
-    return launchConcurrentConsumer(topicConfig, concurrency)
-  }
-
-  @OptIn(ExperimentalCoroutinesApi::class)
-  private fun launchConcurrentConsumer(topicConfig: TopicConfig, concurrency: Int): Job = scope.launch {
-    flowConsumer
-      .consume(topicConfig)
-      .catch { e ->
-        log.error(e) { "Stream error on topic: ${topicConfig.name}" }
-        metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
-      }.flatMapMerge(concurrency) { ackRecord ->
-        flow { emit(handleRecord(ackRecord, topicConfig.name)) }
-      }.collect()
-  }
-
-  /**
-   * Process record - user controls acknowledgment via SpringAcknowledgmentAdapter.
-   */
-  private suspend fun handleRecord(ackRecord: AckableRecord<K, V>, topic: String) {
-    metrics.recordConsumed(topic, consumerName, ackRecord.record.partition())
-
-    val startTime = System.nanoTime()
+  override suspend fun handleRecord(ackRecord: AckableRecord<K, V>): ProcessingResult<*> {
     val ack = Acknowledgment { ackRecord.acknowledge() }
-    val result = retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec, ack) }
-    val duration = (System.nanoTime() - startTime).nanoseconds
-
-    handleProcessingResult(result, topic, duration)
+    return retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec, ack) }
   }
 }
