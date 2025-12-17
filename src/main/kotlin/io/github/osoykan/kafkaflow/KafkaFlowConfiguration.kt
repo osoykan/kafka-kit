@@ -77,6 +77,28 @@ data class ConsumerConfig(
 )
 
 /**
+ * Backpressure configuration for flow-based consumers.
+ *
+ * When processing is slow and the buffer fills up, the container will be paused
+ * to prevent exceeding max.poll.interval.ms and causing consumer rebalances.
+ *
+ * @property enabled Whether backpressure handling is enabled
+ * @property pauseThreshold Pause container when buffer fill level exceeds this ratio (0.0-1.0)
+ * @property resumeThreshold Resume container when buffer fill level drops below this ratio (0.0-1.0)
+ */
+data class BackpressureConfig(
+  val enabled: Boolean = true,
+  val pauseThreshold: Double = 0.8,
+  val resumeThreshold: Double = 0.5
+) {
+  init {
+    require(pauseThreshold in 0.0..1.0) { "pauseThreshold must be between 0.0 and 1.0" }
+    require(resumeThreshold in 0.0..1.0) { "resumeThreshold must be between 0.0 and 1.0" }
+    require(resumeThreshold < pauseThreshold) { "resumeThreshold must be less than pauseThreshold" }
+  }
+}
+
+/**
  * Kafka listener container configuration.
  *
  * @property concurrency Number of concurrent record processors (processing concurrency).
@@ -88,13 +110,15 @@ data class ConsumerConfig(
  * @property commitStrategy Commit strategy for auto-ack consumers (default: PerRecord).
  *   Also determines syncCommits and syncCommitTimeout.
  * @property idleBetweenPolls Idle time between polls
+ * @property backpressure Backpressure configuration for pause/resume behavior
  */
 data class ListenerConfig(
   val concurrency: Int = 4,
   val multiplePartitions: Int = 1,
   val pollTimeout: Duration = 1.seconds,
   val commitStrategy: CommitStrategy = CommitStrategy.PerRecord,
-  val idleBetweenPolls: Duration = Duration.ZERO
+  val idleBetweenPolls: Duration = Duration.ZERO,
+  val backpressure: BackpressureConfig = BackpressureConfig()
 )
 
 /**

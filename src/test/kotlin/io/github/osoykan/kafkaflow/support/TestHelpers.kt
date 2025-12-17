@@ -1,5 +1,6 @@
 package io.github.osoykan.kafkaflow.support
 
+import io.github.osoykan.kafkaflow.BackpressureConfig
 import io.github.osoykan.kafkaflow.FlowKafkaConsumer
 import io.github.osoykan.kafkaflow.FlowKafkaProducer
 import io.github.osoykan.kafkaflow.ListenerConfig
@@ -53,13 +54,16 @@ object TestHelpers {
 
   /**
    * Creates a test listener configuration.
+   * Backpressure is disabled by default for tests to avoid hangs when using .take(n).
    */
   fun testListenerConfig(
     concurrency: Int = 1,
-    pollTimeout: Duration = 500.milliseconds
+    pollTimeout: Duration = 500.milliseconds,
+    backpressureEnabled: Boolean = false
   ): ListenerConfig = ListenerConfig(
     concurrency = concurrency,
-    pollTimeout = pollTimeout
+    pollTimeout = pollTimeout,
+    backpressure = BackpressureConfig(enabled = backpressureEnabled)
   )
 }
 
