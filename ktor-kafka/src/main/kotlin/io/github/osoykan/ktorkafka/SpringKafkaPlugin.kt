@@ -194,6 +194,10 @@ class SpringKafkaContextHolder internal constructor(
       putAll(config.getAdditionalProps())
     }
     val consumerFactory = DefaultKafkaConsumerFactory<Any, Any>(consumerProps)
+
+    // Apply customizer if provided
+    config.getConsumerFactoryCustomizer()?.invoke(consumerFactory)
+
     beanFactory.registerSingleton(consumerFactoryName, consumerFactory)
 
     // Create listener container factory with virtual threads
@@ -203,7 +207,14 @@ class SpringKafkaContextHolder internal constructor(
       containerProperties.pollTimeout = config.pollTimeout.inWholeMilliseconds
       containerProperties.ackMode = ContainerProperties.AckMode.RECORD
       containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
+
+      // Apply error handler if provided
+      config.errorHandler?.let { setCommonErrorHandler(it) }
     }
+
+    // Apply customizer if provided
+    config.getContainerFactoryCustomizer()?.invoke(containerFactory)
+
     beanFactory.registerSingleton(containerFactoryName, containerFactory)
 
     logger.info { "Registered consumer factory '$consumerFactoryName' (virtual threads) for ${config.bootstrapServers}" }
@@ -228,6 +239,10 @@ class SpringKafkaContextHolder internal constructor(
       putAll(config.getAdditionalProps())
     }
     val producerFactory = DefaultKafkaProducerFactory<Any, Any>(producerProps)
+
+    // Apply customizer if provided
+    config.getProducerFactoryCustomizer()?.invoke(producerFactory)
+
     beanFactory.registerSingleton(producerFactoryName, producerFactory)
 
     // Create kafka template
@@ -303,8 +318,8 @@ class SpringKafkaContextHolder internal constructor(
 @ComponentScan
 internal open class DynamicKafkaConfiguration {
   @Bean
-  open fun consumerFactory(config: SpringKafkaConfig): ConsumerFactory<Any, Any> =
-    DefaultKafkaConsumerFactory(
+  open fun consumerFactory(config: SpringKafkaConfig): ConsumerFactory<Any, Any> {
+    val factory = DefaultKafkaConsumerFactory<Any, Any>(
       buildMap {
         put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
         put(ConsumerConfig.GROUP_ID_CONFIG, config.groupId)
@@ -317,9 +332,15 @@ internal open class DynamicKafkaConfiguration {
       }
     )
 
+    // Apply customizer if provided
+    config.getConsumerFactoryCustomizer()?.invoke(factory)
+
+    return factory
+  }
+
   @Bean
-  open fun producerFactory(config: SpringKafkaConfig): ProducerFactory<Any, Any> =
-    DefaultKafkaProducerFactory(
+  open fun producerFactory(config: SpringKafkaConfig): ProducerFactory<Any, Any> {
+    val factory = DefaultKafkaProducerFactory<Any, Any>(
       buildMap {
         put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
         put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, config.keySerializer.java)
@@ -332,6 +353,12 @@ internal open class DynamicKafkaConfiguration {
       }
     )
 
+    // Apply customizer if provided
+    config.getProducerFactoryCustomizer()?.invoke(factory)
+
+    return factory
+  }
+
   @Bean
   open fun kafkaTemplate(producerFactory: ProducerFactory<Any, Any>): KafkaTemplate<Any, Any> =
     KafkaTemplate(producerFactory)
@@ -340,12 +367,21 @@ internal open class DynamicKafkaConfiguration {
   open fun kafkaListenerContainerFactory(
     consumerFactory: ConsumerFactory<Any, Any>,
     config: SpringKafkaConfig
-  ): ConcurrentKafkaListenerContainerFactory<Any, Any> =
-    ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
+  ): ConcurrentKafkaListenerContainerFactory<Any, Any> {
+    val factory = ConcurrentKafkaListenerContainerFactory<Any, Any>().apply {
       setConsumerFactory(consumerFactory)
       setConcurrency(config.getConsumerSettings().concurrency)
       containerProperties.pollTimeout = config.getConsumerSettings().pollTimeout.inWholeMilliseconds
       containerProperties.ackMode = ContainerProperties.AckMode.RECORD
       containerProperties.listenerTaskExecutor = SimpleAsyncTaskExecutor().apply { setVirtualThreads(true) }
+
+      // Apply error handler if provided
+      config.getConsumerSettings().errorHandler?.let { setCommonErrorHandler(it) }
     }
+
+    // Apply customizer if provided
+    config.getContainerFactoryCustomizer()?.invoke(factory)
+
+    return factory
+  }
 }

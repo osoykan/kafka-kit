@@ -4,9 +4,28 @@ import org.apache.kafka.common.serialization.Deserializer
 import org.apache.kafka.common.serialization.Serializer
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.kafka.common.serialization.StringSerializer
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory
+import org.springframework.kafka.core.ConsumerFactory
+import org.springframework.kafka.core.ProducerFactory
+import org.springframework.kafka.listener.CommonErrorHandler
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+/**
+ * Type alias for customizing a [ConsumerFactory] after creation.
+ */
+typealias ConsumerFactoryCustomizer = ConsumerFactory<Any, Any>.() -> Unit
+
+/**
+ * Type alias for customizing a [ProducerFactory] after creation.
+ */
+typealias ProducerFactoryCustomizer = ProducerFactory<Any, Any>.() -> Unit
+
+/**
+ * Type alias for customizing a [ConcurrentKafkaListenerContainerFactory] after creation.
+ */
+typealias ContainerFactoryCustomizer = ConcurrentKafkaListenerContainerFactory<Any, Any>.() -> Unit
 
 /**
  * Configuration DSL for Spring Kafka plugin.
@@ -185,6 +204,11 @@ class SpringKafkaConfig {
   private val consumerFactories = mutableMapOf<String, ConsumerFactoryConfig>()
   private val producerFactories = mutableMapOf<String, ProducerFactoryConfig>()
 
+  // Factory customizers for advanced usage
+  private var consumerFactoryCustomizer: ConsumerFactoryCustomizer? = null
+  private var producerFactoryCustomizer: ProducerFactoryCustomizer? = null
+  private var containerFactoryCustomizer: ContainerFactoryCustomizer? = null
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Consumer Packages
   // ─────────────────────────────────────────────────────────────────────────────
@@ -246,6 +270,84 @@ class SpringKafkaConfig {
    */
   fun producerProperty(key: String, value: Any) {
     additionalProducerProps[key] = value
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Factory Customizers (for advanced usage)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Customize the default [ConsumerFactory] after creation.
+   *
+   * Use this for advanced configuration not exposed via the DSL.
+   *
+   * ```kotlin
+   * customizeConsumerFactory {
+   *   // 'this' is ConsumerFactory<Any, Any>
+   *   addListener(object : ConsumerFactory.Listener<Any, Any> {
+   *     override fun consumerAdded(id: String, consumer: Consumer<Any, Any>) {
+   *       logger.info { "Consumer added: $id" }
+   *     }
+   *   })
+   * }
+   * ```
+   */
+  fun customizeConsumerFactory(block: ConsumerFactoryCustomizer) {
+    consumerFactoryCustomizer = block
+  }
+
+  /**
+   * Customize the default [ProducerFactory] after creation.
+   *
+   * Use this for advanced configuration not exposed via the DSL.
+   *
+   * ```kotlin
+   * customizeProducerFactory {
+   *   // 'this' is ProducerFactory<Any, Any>
+   *   addListener(object : ProducerFactory.Listener<Any, Any> {
+   *     override fun producerAdded(id: String, producer: Producer<Any, Any>) {
+   *       logger.info { "Producer added: $id" }
+   *     }
+   *   })
+   * }
+   * ```
+   */
+  fun customizeProducerFactory(block: ProducerFactoryCustomizer) {
+    producerFactoryCustomizer = block
+  }
+
+  /**
+   * Customize the default [ConcurrentKafkaListenerContainerFactory] after creation.
+   *
+   * Use this for advanced configuration like custom error handlers, interceptors,
+   * or any settings not exposed via the DSL.
+   *
+   * ```kotlin
+   * customizeContainerFactory {
+   *   // 'this' is ConcurrentKafkaListenerContainerFactory<Any, Any>
+   *
+   *   // Custom error handler
+   *   setCommonErrorHandler(DefaultErrorHandler(
+   *     DeadLetterPublishingRecoverer(kafkaTemplate),
+   *     FixedBackOff(1000L, 3L)
+   *   ))
+   *
+   *   // Record interceptor
+   *   setRecordInterceptor { record, consumer ->
+   *     logger.debug { "Intercepted: ${record.topic()}" }
+   *     record
+   *   }
+   *
+   *   // Batch listener
+   *   setBatchListener(true)
+   *
+   *   // After rollback processor
+   *   setAfterRollbackProcessor(DefaultAfterRollbackProcessor())
+   * }
+   * ```
+   */
+  fun customizeContainerFactory(block: ContainerFactoryCustomizer) {
+    containerFactoryCustomizer = block
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -351,6 +453,12 @@ class SpringKafkaConfig {
 
   internal fun getProducerFactories() = producerFactories.toMap()
 
+  internal fun getConsumerFactoryCustomizer() = consumerFactoryCustomizer
+
+  internal fun getProducerFactoryCustomizer() = producerFactoryCustomizer
+
+  internal fun getContainerFactoryCustomizer() = containerFactoryCustomizer
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Configuration Classes
   // ─────────────────────────────────────────────────────────────────────────────
@@ -389,6 +497,27 @@ class SpringKafkaConfig {
      * Default: 500
      */
     var maxPollRecords: Int = 500
+
+    /**
+     * Custom error handler for consumer errors.
+     *
+     * Use Spring Kafka's [CommonErrorHandler] implementations:
+     * - [DefaultErrorHandler] - default with backoff and recovery
+     * - [CommonLoggingErrorHandler] - logs errors only
+     * - [CommonDelegatingErrorHandler] - delegates based on exception type
+     *
+     * ```kotlin
+     * consumer {
+     *   errorHandler = DefaultErrorHandler(
+     *     DeadLetterPublishingRecoverer(kafkaTemplate),
+     *     FixedBackOff(1000L, 3L)
+     *   )
+     * }
+     * ```
+     *
+     * Default: null (uses Spring Kafka's default error handler)
+     */
+    var errorHandler: CommonErrorHandler? = null
   }
 
   /**
@@ -459,8 +588,17 @@ class SpringKafkaConfig {
     /** Max poll records */
     var maxPollRecords: Int = 500
 
+    /** Custom error handler */
+    var errorHandler: CommonErrorHandler? = null
+
     /** Additional properties */
     private val additionalProps = mutableMapOf<String, Any>()
+
+    /** Consumer factory customizer */
+    private var consumerFactoryCustomizer: ConsumerFactoryCustomizer? = null
+
+    /** Container factory customizer */
+    private var containerFactoryCustomizer: ContainerFactoryCustomizer? = null
 
     /**
      * Add additional consumer property.
@@ -469,7 +607,23 @@ class SpringKafkaConfig {
       additionalProps[key] = value
     }
 
+    /**
+     * Customize the [ConsumerFactory] after creation.
+     */
+    fun customizeConsumerFactory(block: ConsumerFactoryCustomizer) {
+      consumerFactoryCustomizer = block
+    }
+
+    /**
+     * Customize the [ConcurrentKafkaListenerContainerFactory] after creation.
+     */
+    fun customizeContainerFactory(block: ContainerFactoryCustomizer) {
+      containerFactoryCustomizer = block
+    }
+
     internal fun getAdditionalProps() = additionalProps.toMap()
+    internal fun getConsumerFactoryCustomizer() = consumerFactoryCustomizer
+    internal fun getContainerFactoryCustomizer() = containerFactoryCustomizer
   }
 
   /**
@@ -506,6 +660,9 @@ class SpringKafkaConfig {
     /** Additional properties */
     private val additionalProps = mutableMapOf<String, Any>()
 
+    /** Producer factory customizer */
+    private var producerFactoryCustomizer: ProducerFactoryCustomizer? = null
+
     /**
      * Add additional producer property.
      */
@@ -513,6 +670,14 @@ class SpringKafkaConfig {
       additionalProps[key] = value
     }
 
+    /**
+     * Customize the [ProducerFactory] after creation.
+     */
+    fun customizeProducerFactory(block: ProducerFactoryCustomizer) {
+      producerFactoryCustomizer = block
+    }
+
     internal fun getAdditionalProps() = additionalProps.toMap()
+    internal fun getProducerFactoryCustomizer() = producerFactoryCustomizer
   }
 }
