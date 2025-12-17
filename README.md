@@ -276,9 +276,11 @@ fun main() {
 }
 ```
 
-## Suspend Listeners
+## Suspend vs Non-Suspend Listeners
 
-Write Kafka consumers with suspend functions:
+Spring Kafka supports both regular and `suspend` listener functions. Each has different commit behavior and performance characteristics.
+
+### Suspend Listeners
 
 ```kotlin
 @Component
@@ -296,10 +298,96 @@ class OrderConsumer(
 }
 ```
 
-**Key points:**
-- `suspend` functions are fully supported
-- Inject dependencies from both Koin and Spring
-- Virtual threads handle the blocking Kafka poll
+**Why special handling is needed:**
+
+With normal `AckMode.BATCH` or `RECORD`, Spring Kafka commits the offset immediately after your listener method returns. But `suspend` functions (and `Mono<Void>`, `CompletableFuture<Void>`) return instantly while actual work happens asynchronously. Without special handling, the offset gets committed before processing finishes—meaning you lose the message if your app crashes mid-processing.
+
+**What Spring Kafka does automatically:**
+
+When it detects an async return type, Spring:
+1. Switches to `AckMode.MANUAL` internally
+2. Waits for the async operation to complete (awaits the suspend function)
+3. Only then acknowledges the offset
+
+**Out-of-order commit handling:**
+
+Say you receive records A, B, C from the same partition:
+
+```
+Record A (offset 1) - still processing
+Record B (offset 2) - complete ✓
+Record C (offset 3) - complete ✓
+→ nothing committed yet (waiting for A)
+
+Record A (offset 1) - complete ✓
+→ commits offset 3 (covers A, B, C in one commit)
+```
+
+Spring tracks which offsets have completed and only commits the **highest contiguous offset**. This preserves at-least-once semantics despite out-of-order completion, without forcing sequential processing.
+
+- Requires `kotlinx-coroutines-reactor` dependency
+- See [Spring Kafka Async Returns](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/async-returns.html) for more details
+
+### Non-Suspend Listeners
+
+```kotlin
+@Component
+class OrderConsumer(
+    private val orderRepository: OrderRepository
+) {
+    @KafkaListener(topics = ["orders.created"])
+    fun consume(record: ConsumerRecord<String, OrderEvent>) {
+        orderRepository.save(record.value())
+    }
+}
+```
+
+**How it works:**
+- Uses `AckMode.BATCH` (Spring's default)
+- Commits all offsets after the entire poll batch is processed
+- Single network round-trip per batch (efficient)
+
+**Calling suspend functions from non-suspend listeners:**
+
+If your services use suspend functions, use `runBlocking` to bridge:
+
+```kotlin
+@Component
+class OrderConsumer(
+    private val orderRepository: OrderRepository  // has suspend functions
+) {
+    @KafkaListener(topics = ["orders.created"])
+    fun consume(record: ConsumerRecord<String, OrderEvent>) {
+        runBlocking(Dispatchers.IO) {
+            // Bridge to coroutine world
+            orderRepository.save(record.value())  // suspend fun
+            notificationService.sendAsync(record.value())  // suspend fun
+        }
+    }
+}
+```
+
+### Comparison
+
+| Aspect | `suspend` Listener | Non-Suspend Listener |
+|--------|-------------------|---------------------|
+| **AckMode** | `MANUAL` (auto-switched) | `BATCH` (default) |
+| **Commits** | After highest contiguous offset completes | After poll batch completes |
+| **Processing** | Concurrent (many records in parallel) | Sequential (one at a time per thread) |
+| **Scalability** | High (non-blocking I/O) | Limited by thread count |
+
+### When to Use Each
+
+**Use `suspend` when:**
+- Your processing involves I/O (HTTP calls, database queries, external services)
+- You need high concurrency - many records processed in parallel
+- You want to scale throughput without adding threads
+- Natural coroutine integration is desired
+
+**Use non-suspend when:**
+- Processing is CPU-bound (no I/O wait time to exploit)
+- You want simpler sequential processing per thread
+- Predictable, ordered processing is preferred
 
 ## DI Bridging
 
