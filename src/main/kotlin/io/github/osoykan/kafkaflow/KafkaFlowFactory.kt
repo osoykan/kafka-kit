@@ -135,6 +135,7 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
           config = config,
           flowConsumer = flowConsumer,
           kafkaTemplate = kafkaTemplate,
+          listenerConfig = listenerConfig,
           metrics = metrics
         )
       }
@@ -146,6 +147,7 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
           config = config,
           flowConsumer = flowConsumer,
           kafkaTemplate = kafkaTemplate,
+          listenerConfig = listenerConfig,
           metrics = metrics
         )
       }

@@ -35,8 +35,10 @@ annotation class KafkaTopic(
   val dlt: String = "",
   /** Consumer group ID (empty = use default from config) */
   val groupId: String = "",
-  /** Number of concurrent consumers for this topic */
+  /** Number of concurrent record processors (processing concurrency) */
   val concurrency: Int = 1,
+  /** Number of Kafka consumer threads/partitions (container concurrency) */
+  val multiplePartitions: Int = 1,
   /** Maximum number of in-memory retries before sending to retry topic */
   val maxInMemoryRetries: Int = 3,
   /** Initial backoff delay in milliseconds for in-memory retries */
@@ -122,6 +124,7 @@ class TopicResolver(
     val topic = TopicConfig(
       name = annotation.name,
       concurrency = annotation.concurrency,
+      multiplePartitions = annotation.multiplePartitions,
       retryTopic = annotation.retry.takeIf { it.isNotBlank() },
       dltTopic = annotation.dlt.takeIf { it.isNotBlank() }
     )

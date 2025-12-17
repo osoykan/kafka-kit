@@ -88,7 +88,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
 
     logger.info {
       "SpringKafkaPoller: Starting auto-ack consumer for topic: ${topic.name}, " +
-        "concurrency: ${container.concurrency}, strategy: ${listenerConfig.commitStrategy}"
+        "partitions: ${container.concurrency}, strategy: ${listenerConfig.commitStrategy}"
     }
     container.start()
 
@@ -129,10 +129,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
     val container = createContainer(topic, containerProps)
     containers["${topic.name}-manual"] = container
 
-    logger.info {
-      "SpringKafkaPoller: Starting manual-ack consumer for topic: ${topic.name}, " +
-        "concurrency: ${container.concurrency}"
-    }
+    logger.info { "SpringKafkaPoller: Starting manual-ack consumer for topic: ${topic.name}, partitions: ${container.concurrency}" }
     container.start()
 
     awaitClose {
@@ -218,7 +215,8 @@ class SpringKafkaPoller<K : Any, V : Any>(
     containerProps: ContainerProperties
   ): ConcurrentMessageListenerContainer<K, V> =
     ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
-      concurrency = topic.effectiveConcurrency(listenerConfig.concurrency)
+      // Container concurrency controls how many Kafka consumer threads/partitions are used
+      concurrency = topic.effectiveMultiplePartitions(listenerConfig.multiplePartitions)
       errorHandler?.let { commonErrorHandler = it }
     }
 }

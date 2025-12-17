@@ -79,7 +79,11 @@ data class ConsumerConfig(
 /**
  * Kafka listener container configuration.
  *
- * @property concurrency Number of concurrent consumer threads/partitions
+ * @property concurrency Number of concurrent record processors (processing concurrency).
+ *   This controls how many records are processed in parallel from the flow.
+ * @property multiplePartitions Number of Kafka consumer threads/partitions (container concurrency).
+ *   Set to > 1 when consuming from topics with multiple partitions.
+ *   Each partition consumer will process records with the configured [concurrency].
  * @property pollTimeout Poll timeout duration
  * @property commitStrategy Commit strategy for auto-ack consumers (default: PerRecord).
  *   Also determines syncCommits and syncCommitTimeout.
@@ -87,6 +91,7 @@ data class ConsumerConfig(
  */
 data class ListenerConfig(
   val concurrency: Int = 4,
+  val multiplePartitions: Int = 1,
   val pollTimeout: Duration = 1.seconds,
   val commitStrategy: CommitStrategy = CommitStrategy.PerRecord,
   val idleBetweenPolls: Duration = Duration.ZERO
@@ -96,7 +101,10 @@ data class ListenerConfig(
  * Topic-specific configuration that can override listener defaults.
  *
  * @property name Topic name
- * @property concurrency Override default concurrency for this topic
+ * @property concurrency Override default processing concurrency for this topic.
+ *   Controls how many records from this topic are processed in parallel.
+ * @property multiplePartitions Override default partition consumers for this topic.
+ *   Controls how many Kafka consumer threads/partitions are used.
  * @property pollTimeout Override default poll timeout for this topic
  * @property retryTopic Optional retry topic name
  * @property dltTopic Optional dead letter topic name
@@ -106,6 +114,7 @@ data class ListenerConfig(
 data class TopicConfig(
   val name: String,
   val concurrency: Int? = null,
+  val multiplePartitions: Int? = null,
   val pollTimeout: Duration? = null,
   val retryTopic: String? = null,
   val dltTopic: String? = null,
@@ -116,6 +125,11 @@ data class TopicConfig(
    * Gets the effective concurrency, using topic-specific or default.
    */
   fun effectiveConcurrency(default: Int): Int = concurrency ?: default
+
+  /**
+   * Gets the effective partition consumers, using topic-specific or default.
+   */
+  fun effectiveMultiplePartitions(default: Int): Int = multiplePartitions ?: default
 
   /**
    * Gets the effective poll timeout, using topic-specific or default.
