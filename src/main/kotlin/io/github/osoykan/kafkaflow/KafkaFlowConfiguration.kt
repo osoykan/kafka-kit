@@ -123,8 +123,9 @@ data class ListenerConfig(
 
 /**
  * Topic-specific configuration that can override listener defaults.
+ * Supports subscribing to one or multiple topics.
  *
- * @property name Topic name
+ * @property topics List of topic names to subscribe to
  * @property concurrency Override default processing concurrency for this topic.
  *   Controls how many records from this topic are processed in parallel.
  * @property multiplePartitions Override default partition consumers for this topic.
@@ -136,7 +137,7 @@ data class ListenerConfig(
  * @property retryBackoff Backoff duration between retries
  */
 data class TopicConfig(
-  val name: String,
+  val topics: List<String>,
   val concurrency: Int? = null,
   val multiplePartitions: Int? = null,
   val pollTimeout: Duration? = null,
@@ -145,6 +146,50 @@ data class TopicConfig(
   val maxRetries: Int = 3,
   val retryBackoff: Duration = 1.seconds
 ) {
+  init {
+    require(topics.isNotEmpty()) { "At least one topic name must be provided" }
+  }
+
+  /**
+   * Primary constructor for single topic (backward compatibility).
+   */
+  constructor(
+    name: String,
+    concurrency: Int? = null,
+    multiplePartitions: Int? = null,
+    pollTimeout: Duration? = null,
+    retryTopic: String? = null,
+    dltTopic: String? = null,
+    maxRetries: Int = 3,
+    retryBackoff: Duration = 1.seconds
+  ) : this(
+    topics = listOf(name),
+    concurrency = concurrency,
+    multiplePartitions = multiplePartitions,
+    pollTimeout = pollTimeout,
+    retryTopic = retryTopic,
+    dltTopic = dltTopic,
+    maxRetries = maxRetries,
+    retryBackoff = retryBackoff
+  )
+
+  /**
+   * Gets the single topic name (for backward compatibility).
+   * Throws if multiple topics are configured.
+   */
+  val name: String
+    get() = if (topics.size == 1) {
+      topics.first()
+    } else {
+      error("Multiple topics configured. Use 'topics' property instead.")
+    }
+
+  /**
+   * Gets a display name for logging (comma-separated topics).
+   */
+  val displayName: String
+    get() = if (topics.size == 1) topics.first() else topics.joinToString(",")
+
   /**
    * Gets the effective concurrency, using topic-specific or default.
    */
@@ -159,4 +204,26 @@ data class TopicConfig(
    * Gets the effective poll timeout, using topic-specific or default.
    */
   fun effectivePollTimeout(default: Duration): Duration = pollTimeout ?: default
+
+  companion object {
+    /**
+     * Creates a TopicConfig for multiple topics.
+     */
+    fun of(vararg topics: String): TopicConfig = TopicConfig(topics = topics.toList())
+
+    /**
+     * Creates a TopicConfig for multiple topics with configuration.
+     */
+    fun of(
+      topics: List<String>,
+      concurrency: Int? = null,
+      multiplePartitions: Int? = null,
+      pollTimeout: Duration? = null
+    ): TopicConfig = TopicConfig(
+      topics = topics,
+      concurrency = concurrency,
+      multiplePartitions = multiplePartitions,
+      pollTimeout = pollTimeout
+    )
+  }
 }

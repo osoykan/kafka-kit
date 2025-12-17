@@ -4,31 +4,37 @@ import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Annotation to bind a consumer to a topic with full retry configuration.
+ * Annotation to bind a consumer to one or more topics with full retry configuration.
  * ALL policies are configurable per consumer!
  *
- * Example:
+ * Example (single topic):
  * ```kotlin
  * @KafkaTopic(
  *     name = "orders.created",
  *     retry = "orders.created.retry",
  *     dlt = "orders.created.dlt",
  *     concurrency = 4,
- *     maxInMemoryRetries = 3,
- *     maxRetryTopicAttempts = 2,
- *     backoffMs = 100,
- *     backoffMultiplier = 2.0,
- *     maxRetryDurationMs = 300000,  // 5 minutes max
- *     classifier = ClassifierType.DEFAULT
+ *     maxInMemoryRetries = 3
  * )
  * class OrderCreatedConsumer : ConsumerAutoAck<String, OrderEvent> { ... }
+ * ```
+ *
+ * Example (multiple topics):
+ * ```kotlin
+ * @KafkaTopic(
+ *     topics = ["orders.created", "orders.updated"],
+ *     concurrency = 8
+ * )
+ * class OrderEventsConsumer : ConsumerAutoAck<String, OrderEvent> { ... }
  * ```
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
 annotation class KafkaTopic(
-  /** Main topic name */
-  val name: String,
+  /** Main topic name (for single topic, use this OR topics) */
+  val name: String = "",
+  /** Multiple topic names (use this OR name for single topic) */
+  val topics: Array<String> = [],
   /** Retry topic name (empty = auto-generate as {name}.retry) */
   val retry: String = "",
   /** Dead letter topic name (empty = auto-generate as {name}.dlt) */
@@ -77,13 +83,15 @@ data class ResolvedConsumerConfig(
 ) {
   /**
    * Effective retry topic name.
+   * For multiple topics, uses first topic as base name.
    */
-  val retryTopic: String get() = topic.retryTopic ?: (topic.name + retry.retryTopicSuffix)
+  val retryTopic: String get() = topic.retryTopic ?: (topic.topics.first() + retry.retryTopicSuffix)
 
   /**
    * Effective DLT topic name.
+   * For multiple topics, uses first topic as base name.
    */
-  val dltTopic: String get() = topic.dltTopic ?: (topic.name + retry.dltSuffix)
+  val dltTopic: String get() = topic.dltTopic ?: (topic.topics.first() + retry.dltSuffix)
 }
 
 /**
@@ -121,8 +129,15 @@ class TopicResolver(
 
     val classifier = annotation.classifier.toClassifier(additionalNonRetryable)
 
+    // Resolve topics from either name (single) or topics (multiple)
+    val topicNames = when {
+      annotation.topics.isNotEmpty() -> annotation.topics.toList()
+      annotation.name.isNotBlank() -> listOf(annotation.name)
+      else -> error("@KafkaTopic must specify either 'name' or 'topics'")
+    }
+
     val topic = TopicConfig(
-      name = annotation.name,
+      topics = topicNames,
       concurrency = annotation.concurrency,
       multiplePartitions = annotation.multiplePartitions,
       retryTopic = annotation.retry.takeIf { it.isNotBlank() },

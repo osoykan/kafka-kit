@@ -69,7 +69,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   )
 
   override val topics: List<String>
-    get() = listOf(config.topic.name, config.retryTopic)
+    get() = config.topic.topics + config.retryTopic
 
   override fun start() {
     if (running) {
@@ -77,7 +77,7 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
       return
     }
 
-    log.info { "Starting consumer for topic: ${config.topic.name}" }
+    log.info { "Starting consumer for topics: [${config.topic.displayName}]" }
     running = true
 
     launchConsumer(config.topic)
@@ -87,16 +87,16 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
   @OptIn(ExperimentalCoroutinesApi::class)
   private fun launchConsumer(topicConfig: TopicConfig): Job {
     val concurrency = topicConfig.effectiveConcurrency(listenerConfig.concurrency)
-    log.info { "Starting consumer for ${topicConfig.name} with processing concurrency: $concurrency" }
+    log.info { "Starting consumer for [${topicConfig.displayName}] with processing concurrency: $concurrency" }
 
     return scope.launch {
       flowConsumer
         .consume(topicConfig)
         .catch { e ->
-          log.error(e) { "Stream error on topic: ${topicConfig.name}" }
-          metrics.recordProcessingFailure(topicConfig.name, consumerName, e)
+          log.error(e) { "Stream error on topics: [${topicConfig.displayName}]" }
+          metrics.recordProcessingFailure(topicConfig.displayName, consumerName, e)
         }.flatMapMerge(concurrency) { ackRecord ->
-          flow { emit(processRecord(ackRecord, topicConfig.name)) }
+          flow { emit(processRecord(ackRecord, ackRecord.record.topic())) }
         }.collect()
     }
   }

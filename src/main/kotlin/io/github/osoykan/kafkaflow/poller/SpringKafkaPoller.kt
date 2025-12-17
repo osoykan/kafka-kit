@@ -131,7 +131,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
         containerProvider = { containerRef.container },
         config = listenerConfig.backpressure,
         bufferCapacity = bufferCapacity,
-        topicName = topic.name
+        topicName = topic.displayName
       )
 
       // Create the listener with backpressure support
@@ -142,7 +142,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
         )
         trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
           if (exception !is CancellationException) {
-            logger.error(exception) { "Failed to emit record from topic ${topic.name}: ${record.key()}" }
+            logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
           }
         }
         backpressure.onBufferAdd()
@@ -153,19 +153,19 @@ class SpringKafkaPoller<K : Any, V : Any>(
       containerProps.setMessageListener(listener)
       val container = createContainer(topic, containerProps)
       containerRef.container = container
-      containers["${topic.name}-auto"] = container
+      containers["${topic.displayName}-auto"] = container
 
       logger.info {
-        "SpringKafkaPoller: Starting auto-ack consumer for topic: ${topic.name}, " +
+        "SpringKafkaPoller: Starting auto-ack consumer for topics: [${topic.displayName}], " +
           "partitions: ${container.concurrency}, strategy: ${listenerConfig.commitStrategy}, " +
           "backpressure: ${if (listenerConfig.backpressure.enabled) "enabled" else "disabled"}"
       }
       container.start()
 
       awaitClose {
-        logger.info { "SpringKafkaPoller: Stopping auto-ack consumer for topic: ${topic.name}" }
+        logger.info { "SpringKafkaPoller: Stopping auto-ack consumer for topics: [${topic.displayName}]" }
         container.stop()
-        containers.remove("${topic.name}-auto")
+        containers.remove("${topic.displayName}-auto")
       }
     }.buffer(bufferCapacity)
       .onEach { backpressure.onBufferConsume() }
@@ -195,7 +195,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
         containerProvider = { containerRef.container },
         config = listenerConfig.backpressure,
         bufferCapacity = bufferCapacity,
-        topicName = topic.name
+        topicName = topic.displayName
       )
 
       // Create the listener with backpressure support
@@ -207,7 +207,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
           )
           trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
             if (exception !is CancellationException) {
-              logger.error(exception) { "Failed to emit record from topic ${topic.name}: ${record.key()}" }
+              logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
             }
           }
           backpressure.onBufferAdd()
@@ -219,19 +219,19 @@ class SpringKafkaPoller<K : Any, V : Any>(
       containerProps.setMessageListener(listener)
       val container = createContainer(topic, containerProps)
       containerRef.container = container
-      containers["${topic.name}-manual"] = container
+      containers["${topic.displayName}-manual"] = container
 
       logger.info {
-        "SpringKafkaPoller: Starting manual-ack consumer for topic: ${topic.name}, " +
+        "SpringKafkaPoller: Starting manual-ack consumer for topics: [${topic.displayName}], " +
           "partitions: ${container.concurrency}, " +
           "backpressure: ${if (listenerConfig.backpressure.enabled) "enabled" else "disabled"}"
       }
       container.start()
 
       awaitClose {
-        logger.info { "SpringKafkaPoller: Stopping manual-ack consumer for topic: ${topic.name}" }
+        logger.info { "SpringKafkaPoller: Stopping manual-ack consumer for topics: [${topic.displayName}]" }
         container.stop()
-        containers.remove("${topic.name}-manual")
+        containers.remove("${topic.displayName}-manual")
       }
     }.buffer(bufferCapacity)
       .onEach { backpressure.onBufferConsume() }
@@ -255,7 +255,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
   override fun isStopped(): Boolean = stopped.get()
 
   private fun createAutoAckContainerProperties(topic: TopicConfig): ContainerProperties =
-    ContainerProperties(topic.name).also { props ->
+    ContainerProperties(*topic.topics.toTypedArray()).also { props ->
       props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
 
       // Map CommitStrategy to Spring Kafka AckMode
@@ -288,7 +288,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
     }
 
   private fun createManualAckContainerProperties(topic: TopicConfig): ContainerProperties =
-    ContainerProperties(topic.name).also { props ->
+    ContainerProperties(*topic.topics.toTypedArray()).also { props ->
       props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
       props.ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
       props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
@@ -300,7 +300,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
   private fun configureVirtualThreads(props: ContainerProperties, topic: TopicConfig) {
     val executor = SimpleAsyncTaskExecutor("spring-kafka-vt-").apply { setVirtualThreads(true) }
     props.listenerTaskExecutor = executor
-    logger.debug { "SpringKafkaPoller: Using virtual threads for topic: ${topic.name}" }
+    logger.debug { "SpringKafkaPoller: Using virtual threads for topics: [${topic.displayName}]" }
   }
 
   private fun createContainer(
