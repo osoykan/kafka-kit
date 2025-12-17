@@ -111,7 +111,7 @@ fun Application.appModule(
     valueDeserializer = JacksonDeserializer::class
 
     // Auto-discover consumers and Spring services
-    consumerPackages(
+    scanPackages(
       "io.github.osoykan.springkafka.example.consumers",
       "io.github.osoykan.springkafka.example.infra"
     )

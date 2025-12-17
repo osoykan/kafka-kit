@@ -220,7 +220,7 @@ class SpringKafkaConfig {
    * consumerPackages("com.example.consumers", "com.example.handlers")
    * ```
    */
-  fun consumerPackages(vararg packages: String) {
+  fun scanPackages(vararg packages: String) {
     scanPackages.addAll(packages)
   }
 
