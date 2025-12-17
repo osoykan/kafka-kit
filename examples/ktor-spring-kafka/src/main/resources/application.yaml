@@ -1,0 +1,19 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+kafka:
+  bootstrap-servers: "localhost:9092"
+  group-id: "ktor-spring-kafka-example"
+  interceptor-classes: ""
+  
+  consumer:
+    enabled: true
+    concurrency: 4
+    poll-timeout: "1s"
+  
+  producer:
+    acks: "all"
+    retries: 3
+    compression: "lz4"
+
