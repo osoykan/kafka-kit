@@ -108,6 +108,9 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
     val result = handleRecord(ackRecord)
     val duration = (System.nanoTime() - startTime).nanoseconds
 
+    // Acknowledge after processing (triggers OrderedCommitter commit)
+    ackRecord.acknowledge()
+
     logResult(result, topic, duration)
   }
 
