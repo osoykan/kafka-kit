@@ -140,12 +140,14 @@ class SpringKafkaPoller<K : Any, V : Any>(
           record = record,
           acknowledge = { /* no-op - Spring Kafka auto-commits */ }
         )
-        trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
-          if (exception !is CancellationException) {
-            logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
+        trySendBlocking(ackableRecord)
+          .onSuccess {
+            backpressure.onBufferAdd()
+          }.onFailure { exception ->
+            if (exception !is CancellationException) {
+              logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
+            }
           }
-        }
-        backpressure.onBufferAdd()
       }
 
       // Create container with listener set
@@ -205,12 +207,14 @@ class SpringKafkaPoller<K : Any, V : Any>(
             record = record,
             acknowledge = { ack.acknowledge() }
           )
-          trySendBlocking(ackableRecord).exceptionOrNull()?.let { exception ->
-            if (exception !is CancellationException) {
-              logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
+          trySendBlocking(ackableRecord)
+            .onSuccess {
+              backpressure.onBufferAdd()
+            }.onFailure { exception ->
+              if (exception !is CancellationException) {
+                logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
+              }
             }
-          }
-          backpressure.onBufferAdd()
         }
       }
 
