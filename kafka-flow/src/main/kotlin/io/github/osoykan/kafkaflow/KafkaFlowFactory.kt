@@ -1,6 +1,5 @@
 package io.github.osoykan.kafkaflow
 
-import io.github.osoykan.kafkaflow.poller.AckMode
 import kotlinx.coroutines.*
 import org.springframework.kafka.core.*
 
@@ -126,10 +125,10 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
 ) : ConsumerSupervisorFactory<K, V> {
   override fun createSupervisors(consumers: List<Consumer<K, V>>): List<ConsumerSupervisor> = consumers.map { consumer ->
     val config = topicResolver.resolve(consumer)
+    val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, dispatcher = dispatcher)
 
     when (consumer) {
       is ConsumerAutoAck<K, V> -> {
-        val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, AckMode.AUTO, dispatcher = dispatcher)
         ConsumerAutoAckSupervisor(
           consumer = consumer,
           config = config,
@@ -141,7 +140,6 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
       }
 
       is ConsumerManualAck<K, V> -> {
-        val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, AckMode.MANUAL, dispatcher = dispatcher)
         ConsumerManualAckSupervisor(
           consumer = consumer,
           config = config,
