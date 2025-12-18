@@ -273,4 +273,23 @@ class RetryPolicyTests :
       val success = result.shouldBeInstanceOf<ProcessingResult.Success<Int>>()
       success.value shouldBe 5
     }
+
+    test("RetryableProcessor should be robust against malformed headers (poison headers)") {
+      val topic = TestHelpers.uniqueTopicName()
+      val kafkaTemplate = kafka.createStringKafkaTemplate()
+      val processor = RetryableProcessor(kafkaTemplate, RetryPolicy.TIME_LIMITED)
+
+      // Header with non-numeric value for a numeric field
+      val record = ConsumerRecord(topic, 0, 0L, "key", "value").apply {
+        headers().add("x-first-failure-time", "not-a-number".toByteArray())
+        headers().add("x-retry-topic-attempt", "garbage".toByteArray())
+      }
+
+      // Should not throw NumberFormatException, but ignore malformed headers
+      val result = processor.process(record) {
+        "ok"
+      }
+
+      result.shouldBeInstanceOf<ProcessingResult.Success<String>>()
+    }
   })

@@ -185,6 +185,30 @@ class BackpressureTests :
       val expectedMinTime = itemCount * processingTimePerItem.inWholeMilliseconds
       duration.inWholeMilliseconds shouldBeGreaterThan (expectedMinTime - 100)
     }
+
+    test("cancellation during processing should interrupt the flow immediately") {
+      val processed = AtomicInteger(0)
+      val flow = flow {
+        repeat(10) { i ->
+          emit(i)
+        }
+      }
+
+      val scope = CoroutineScope(Dispatchers.Default)
+      val job = scope.launch {
+        flow.collect {
+          delay(1000.milliseconds) // Long processing
+          processed.incrementAndGet()
+        }
+      }
+
+      // Wait a bit and then cancel
+      delay(150.milliseconds)
+      job.cancelAndJoin()
+
+      // Should have processed 0 items because the first one was cancelled during its long delay
+      processed.get() shouldBe 0
+    }
   })
 
 /**

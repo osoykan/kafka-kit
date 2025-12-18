@@ -1,8 +1,10 @@
 package io.github.osoykan.kafkaflow
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -23,7 +25,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestOrderConsumer())
 
       config.topic.name shouldBe "test.orders"
@@ -40,7 +42,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestPaymentConsumer())
 
       config.topic.name shouldBe "test.payments"
@@ -58,7 +60,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestEventConsumer())
 
       config.retry.maxRetryDuration shouldNotBe null
@@ -76,7 +78,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestNotificationConsumer())
 
       // AlwaysRetryClassifier should retry everything
@@ -92,7 +94,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestCriticalConsumer())
 
       // NeverRetryClassifier should never retry
@@ -112,7 +114,7 @@ class TopicResolverTests :
         )
       )
 
-      val resolver = TopicResolver(topicConfigs = topicConfigs)
+      val resolver = DefaultTopicResolver(topicConfigs = topicConfigs)
       val config = resolver.resolve(TestLegacyConsumer())
 
       config.topic.name shouldBe "legacy.topic"
@@ -129,7 +131,7 @@ class TopicResolverTests :
         override suspend fun consume(record: ConsumerRecord<String, String>) {}
       }
 
-      val resolver = TopicResolver()
+      val resolver = DefaultTopicResolver()
       val config = resolver.resolve(TestBackoffConsumer())
 
       val backoff = config.retry.inMemoryBackoff as BackoffStrategy.Exponential
@@ -173,5 +175,115 @@ class TopicResolverTests :
 
       config.retryTopic shouldBe "custom.retry.topic"
       config.dltTopic shouldBe "custom.dlt.topic"
+    }
+
+    test("ResolvedConsumerConfig should throw error when auto-generating retry topic for multiple main topics") {
+      val config = ResolvedConsumerConfig(
+        topic = TopicConfig(topics = listOf("topic1", "topic2")),
+        retry = RetryPolicy(),
+        classifier = DefaultExceptionClassifier(),
+        consumerName = "MultiTopicConsumer"
+      )
+
+      val retryEx = shouldThrow<IllegalStateException> { config.retryTopic }
+      retryEx.message shouldContain "listens to multiple topics"
+
+      val dltEx = shouldThrow<IllegalStateException> { config.dltTopic }
+      dltEx.message shouldContain "listens to multiple topics"
+    }
+
+    test("DefaultTopicResolver should merge manual config overrides into annotation values") {
+      @KafkaTopic(
+        name = "test.orders",
+        concurrency = 4,
+        maxInMemoryRetries = 5
+      )
+      class MergingConsumer : ConsumerAutoAck<String, String> {
+        override suspend fun consume(record: ConsumerRecord<String, String>) {}
+      }
+
+      val topicConfigs = mapOf(
+        "MergingConsumer" to TopicConfig(
+          concurrency = 8, // Override
+          maxInMemoryRetries = 2 // Override
+        )
+      )
+
+      val resolver = DefaultTopicResolver(topicConfigs = topicConfigs)
+      val config = resolver.resolve(MergingConsumer())
+
+      config.topic.name shouldBe "test.orders" // From annotation
+      config.topic.concurrency shouldBe 8 // Overridden
+      config.retry.maxInMemoryRetries shouldBe 2 // Overridden
+    }
+
+    test("DefaultTopicResolver should support partial merging of backoff settings") {
+      @KafkaTopic(
+        name = "test.backoff",
+        backoffMs = 100,
+        backoffMultiplier = 2.0
+      )
+      class BackoffMergingConsumer : ConsumerAutoAck<String, String> {
+        override suspend fun consume(record: ConsumerRecord<String, String>) {}
+      }
+
+      val topicConfigs = mapOf(
+        "BackoffMergingConsumer" to TopicConfig(
+          backoffMultiplier = 4.0 // Override only multiplier
+        )
+      )
+
+      val resolver = DefaultTopicResolver(topicConfigs = topicConfigs)
+      val config = resolver.resolve(BackoffMergingConsumer())
+
+      val backoff = config.retry.inMemoryBackoff as BackoffStrategy.Exponential
+      backoff.initialDelay shouldBe 100.milliseconds // From annotation
+      backoff.multiplier shouldBe 4.0 // Overridden
+    }
+
+    test("DefaultTopicResolver should throw error when no topics are provided anywhere") {
+      @KafkaTopic() // No name or topics
+      class InvalidConsumer : ConsumerAutoAck<String, String> {
+        override suspend fun consume(record: ConsumerRecord<String, String>) {}
+      }
+
+      val resolver = DefaultTopicResolver()
+      val ex = shouldThrow<IllegalArgumentException> {
+        resolver.resolve(InvalidConsumer())
+      }
+      ex.message shouldContain "No topics configured"
+    }
+
+    test("DefaultTopicResolver should allow fully manual configuration for consumer without annotation") {
+      class ManualOnlyConsumer : ConsumerAutoAck<String, String> {
+        override suspend fun consume(record: ConsumerRecord<String, String>) {}
+      }
+
+      val topicConfigs = mapOf(
+        "ManualOnlyConsumer" to TopicConfig(
+          topics = listOf("manual.topic"),
+          concurrency = 10
+        )
+      )
+
+      val resolver = DefaultTopicResolver(topicConfigs = topicConfigs)
+      val config = resolver.resolve(ManualOnlyConsumer())
+
+      config.topic.topics shouldBe listOf("manual.topic")
+      config.topic.concurrency shouldBe 10
+    }
+
+    test("ResolvedConsumerConfig should work with multiple topics if explicit retry topic is provided") {
+      val config = ResolvedConsumerConfig(
+        topic = TopicConfig(
+          topics = listOf("t1", "topic2"),
+          retryTopic = "explicit.retry"
+        ),
+        retry = RetryPolicy(),
+        classifier = DefaultExceptionClassifier(),
+        consumerName = "MultiTopicConsumer"
+      )
+
+      config.retryTopic shouldBe "explicit.retry"
     }
   })

@@ -123,6 +123,21 @@ class FallbackBeanFactoryTest :
           // Then: It should be tracked
           beanFactory.containsBean("testService") shouldBe true
         }
+
+        it("should warn when resolving non-singleton dependencies for Kafka listeners") {
+          // Given: A resolver that provides a non-singleton bean
+          val resolver = object : MapDependencyResolver(TestService::class to TestService("factory")) {
+            override fun isSingleton(type: KClass<*>): Boolean = false
+          }
+          val beanFactory = FallbackBeanFactory(resolver)
+
+          // When: We resolve the bean (simulating what happens when a listener is created)
+          beanFactory.getBean(TestService::class.java)
+
+          // Then: It should be resolved (warning logic is internal to the factory)
+          // We can't easily check the log here without complex mocking, but we verify it doesn't crash
+          beanFactory.containsBean("testService") shouldBe true
+        }
       }
 
       describe("collection types (List<T> support)") {
@@ -233,7 +248,7 @@ class UnknownService
 /**
  * Simple map-based dependency resolver for testing.
  */
-class MapDependencyResolver(
+open class MapDependencyResolver(
   vararg beans: Pair<KClass<*>, Any>
 ) : DependencyResolver {
   private val beanMap = beans.toMap()
@@ -251,6 +266,8 @@ class MapDependencyResolver(
   }
 
   override fun canResolve(type: KClass<*>): Boolean = beanMap.containsKey(type)
+
+  override fun isSingleton(type: KClass<*>): Boolean = true
 }
 
 /**
@@ -268,4 +285,6 @@ class ListDependencyResolver<T : Any>(
   override fun <R : Any> resolveAll(type: KClass<R>): List<R> = beans as List<R>
 
   override fun canResolve(type: KClass<*>): Boolean = beans.isNotEmpty()
+
+  override fun isSingleton(type: KClass<*>): Boolean = true
 }

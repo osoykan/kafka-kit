@@ -21,7 +21,7 @@ data class KafkaFlowFactoryConfig<K : Any, V : Any>(
   val producerProperties: Map<String, Any>,
   val listenerConfig: ListenerConfig = ListenerConfig(),
   val metrics: KafkaFlowMetrics = NoOpMetrics,
-  val topicResolver: TopicResolver = TopicResolver()
+  val topicResolver: TopicResolver = DefaultTopicResolver()
 )
 
 /**

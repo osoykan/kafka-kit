@@ -73,7 +73,7 @@ annotation class KafkaTopic(
 
 /**
  * Resolved configuration for a consumer.
- * Created by TopicResolver from @KafkaTopic annotation or config map.
+ * Created by TopicResolver from @KafkaTopic annotation or manual config.
  */
 data class ResolvedConsumerConfig(
   val topic: TopicConfig,
@@ -83,41 +83,98 @@ data class ResolvedConsumerConfig(
 ) {
   /**
    * Effective retry topic name.
-   * For multiple topics, uses first topic as base name.
+   * Auto-generation (suffix) only works for single-topic consumers.
+   * For multi-topic consumers, an explicit retryTopic name must be provided.
    */
-  val retryTopic: String get() = topic.retryTopic ?: (topic.topics.first() + retry.retryTopicSuffix)
+  val retryTopic: String
+    get() = topic.retryTopic ?: if (topic.topics.size == 1) {
+      topic.topics.first() + retry.retryTopicSuffix
+    } else {
+      error("Consumer '$consumerName' listens to multiple topics ${topic.topics}, so you must provide an explicit 'retryTopic' name.")
+    }
 
   /**
    * Effective DLT topic name.
-   * For multiple topics, uses first topic as base name.
+   * Auto-generation (suffix) only works for single-topic consumers.
+   * For multi-topic consumers, an explicit dltTopic name must be provided.
    */
-  val dltTopic: String get() = topic.dltTopic ?: (topic.topics.first() + retry.dltSuffix)
+  val dltTopic: String
+    get() = topic.dltTopic ?: if (topic.topics.size == 1) {
+      topic.topics.first() + retry.dltSuffix
+    } else {
+      error("Consumer '$consumerName' listens to multiple topics ${topic.topics}, so you must provide an explicit 'dltTopic' name.")
+    }
 }
 
 /**
  * Resolves topic + retry configuration for consumers.
- * Uses @KafkaTopic annotation if present, otherwise falls back to config map.
  */
-class TopicResolver(
-  private val topicConfigs: Map<String, TopicConfig> = emptyMap(),
-  private val defaultRetryPolicy: RetryPolicy = RetryPolicy.DEFAULT
-) {
+interface TopicResolver {
   /**
    * Resolves the configuration for a consumer.
    *
    * @param consumer The consumer to resolve config for
    * @return Resolved configuration
-   * @throws IllegalStateException if no config found for consumer
    */
-  fun resolve(consumer: Consumer<*, *>): ResolvedConsumerConfig {
-    val annotation = consumer::class.java.getAnnotation(KafkaTopic::class.java)
+  fun resolve(consumer: Consumer<*, *>): ResolvedConsumerConfig
+}
 
-    return if (annotation != null) {
+/**
+ * Default implementation of TopicResolver that supports @KafkaTopic annotations
+ * and manual configuration overrides with field-level merging.
+ *
+ * Resolution priority:
+ * 1. Values from manual config (topicConfigs map) override anything else.
+ * 2. Values from @KafkaTopic annotation.
+ * 3. System defaults.
+ */
+class DefaultTopicResolver(
+  private val topicConfigs: Map<String, TopicConfig> = emptyMap(),
+  private val defaultRetryPolicy: RetryPolicy = RetryPolicy.DEFAULT
+) : TopicResolver {
+  override fun resolve(consumer: Consumer<*, *>): ResolvedConsumerConfig {
+    val annotation = consumer::class.java.getAnnotation(KafkaTopic::class.java)
+    val manualOverride = topicConfigs[consumer.consumerName]
+
+    if (annotation == null && manualOverride == null) {
+      error(
+        "No topic config found for consumer: ${consumer.consumerName}. " +
+          "Either add @KafkaTopic annotation or provide manual config in topicConfigs map."
+      )
+    }
+
+    // 1. Resolve base from annotation or defaults
+    val base = if (annotation != null) {
       resolveFromAnnotation(annotation, consumer.consumerName)
     } else {
-      resolveFromConfig(consumer.consumerName)
+      createBaseFromDefaults(consumer.consumerName)
     }
+
+    // 2. Merge manual override if present
+    val resolved = if (manualOverride != null) {
+      base.copy(
+        topic = base.topic.mergeWith(manualOverride),
+        retry = manualOverride.toRetryPolicy(base.retry)
+      )
+    } else {
+      base
+    }
+
+    // 3. Final validation
+    require(resolved.topic.topics.isNotEmpty()) {
+      "No topics configured for consumer: ${consumer.consumerName}. " +
+        "Ensure @KafkaTopic specifies 'name'/'topics' or manual config provides them."
+    }
+
+    return resolved
   }
+
+  private fun createBaseFromDefaults(consumerName: String): ResolvedConsumerConfig = ResolvedConsumerConfig(
+    topic = TopicConfig(topics = emptyList()),
+    retry = defaultRetryPolicy,
+    classifier = DefaultExceptionClassifier(),
+    consumerName = consumerName
+  )
 
   private fun resolveFromAnnotation(
     annotation: KafkaTopic,
@@ -133,11 +190,12 @@ class TopicResolver(
     val topicNames = when {
       annotation.topics.isNotEmpty() -> annotation.topics.toList()
       annotation.name.isNotBlank() -> listOf(annotation.name)
-      else -> error("@KafkaTopic must specify either 'name' or 'topics'")
+      else -> emptyList() // Allow empty if we expect manual override to provide it
     }
 
     val topic = TopicConfig(
       topics = topicNames,
+      groupId = annotation.groupId.takeIf { it.isNotBlank() },
       concurrency = annotation.concurrency,
       multiplePartitions = annotation.multiplePartitions,
       retryTopic = annotation.retry.takeIf { it.isNotBlank() },
@@ -169,21 +227,6 @@ class TopicResolver(
       topic = topic,
       retry = retryPolicy,
       classifier = classifier,
-      consumerName = consumerName
-    )
-  }
-
-  private fun resolveFromConfig(consumerName: String): ResolvedConsumerConfig {
-    val topicConfig = topicConfigs[consumerName]
-      ?: error(
-        "No topic config found for consumer: $consumerName. " +
-          "Either add @KafkaTopic annotation or provide config for '$consumerName'"
-      )
-
-    return ResolvedConsumerConfig(
-      topic = topicConfig,
-      retry = defaultRetryPolicy,
-      classifier = DefaultExceptionClassifier(),
       consumerName = consumerName
     )
   }

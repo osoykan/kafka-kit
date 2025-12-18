@@ -211,6 +211,37 @@ interface KafkaFlowMetrics {
 
 **Built-in:** `NoOpMetrics`, `LoggingMetrics`, `CompositeMetrics`
 
+### Configuration Overrides
+
+While `@KafkaTopic` is the idiomatic way to configure consumers, you can override any setting via `DefaultTopicResolver`. This allows for environment-specific settings (like increasing concurrency in production) without recompiling.
+
+**Merging Strategy:**
+Manual configuration is merged with annotation values at the field level. If a field is set in `TopicConfig`, it overrides the annotation; otherwise, the annotation value (or its default) is used.
+
+```kotlin
+val factory = KafkaFlowFactory.create(
+    KafkaFlowFactoryConfig(
+        consumerProperties = properties,
+        producerProperties = properties,
+        topicResolver = DefaultTopicResolver(
+            topicConfigs = mapOf(
+                "OrderCreatedConsumer" to TopicConfig(
+                    concurrency = 8,        // Overrides annotation
+                    maxInMemoryRetries = 10 // Overrides annotation
+                )
+            )
+        )
+    )
+)
+```
+
+Supported override fields in `TopicConfig`:
+- `topics`, `groupId`, `concurrency`, `multiplePartitions`
+- `retryTopic`, `dltTopic`
+- `maxInMemoryRetries`, `backoffMs`, `backoffMultiplier`, `maxBackoffMs`
+- `maxRetryTopicAttempts`, `retryTopicBackoffMs`, `retryTopicBackoffMultiplier`, `maxRetryTopicBackoffMs`
+- `maxRetryDurationMs`, `maxMessageAgeMs`
+
 ---
 
 # ktor-kafka Plugin

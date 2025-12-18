@@ -97,6 +97,70 @@ data class RetryPolicy(
   val maxRetryDuration: Duration? = null,
   val maxMessageAge: Duration? = null
 ) {
+  /**
+   * Merges another [RetryPolicy] into this one, where the [other] takes priority
+   * for non-default values.
+   */
+  fun mergeWith(other: RetryPolicy): RetryPolicy = copy(
+    maxInMemoryRetries = other.maxInMemoryRetries,
+    inMemoryBackoff = other.inMemoryBackoff,
+    maxRetryTopicAttempts = other.maxRetryTopicAttempts,
+    retryTopicBackoff = other.retryTopicBackoff,
+    retryTopicSuffix = other.retryTopicSuffix,
+    dltSuffix = other.dltSuffix,
+    maxRetryDuration = other.maxRetryDuration ?: maxRetryDuration,
+    maxMessageAge = other.maxMessageAge ?: maxMessageAge
+  )
+
+  /**
+   * Updates this policy with non-null values from primitive configuration fields.
+   */
+  fun updateFrom(
+    maxInMemoryRetries: Int? = null,
+    maxRetryTopicAttempts: Int? = null,
+    maxRetryDurationMs: Long? = null,
+    maxMessageAgeMs: Long? = null,
+    backoffMs: Long? = null,
+    backoffMultiplier: Double? = null,
+    maxBackoffMs: Long? = null,
+    retryTopicBackoffMs: Long? = null,
+    retryTopicBackoffMultiplier: Double? = null,
+    maxRetryTopicBackoffMs: Long? = null
+  ): RetryPolicy {
+    var policy = this.copy(
+      maxInMemoryRetries = maxInMemoryRetries ?: this.maxInMemoryRetries,
+      maxRetryTopicAttempts = maxRetryTopicAttempts ?: this.maxRetryTopicAttempts,
+      maxRetryDuration = maxRetryDurationMs?.milliseconds ?: this.maxRetryDuration,
+      maxMessageAge = maxMessageAgeMs?.milliseconds ?: this.maxMessageAge
+    )
+
+    // Merge in-memory backoff
+    if (backoffMs != null || backoffMultiplier != null || maxBackoffMs != null) {
+      val exp = policy.inMemoryBackoff as? BackoffStrategy.Exponential ?: BackoffStrategy.Exponential()
+      policy = policy.copy(
+        inMemoryBackoff = exp.copy(
+          initialDelay = backoffMs?.milliseconds ?: exp.initialDelay,
+          multiplier = backoffMultiplier ?: exp.multiplier,
+          maxDelay = maxBackoffMs?.milliseconds ?: exp.maxDelay
+        )
+      )
+    }
+
+    // Merge retry topic backoff
+    if (retryTopicBackoffMs != null || retryTopicBackoffMultiplier != null || maxRetryTopicBackoffMs != null) {
+      val exp = policy.retryTopicBackoff as? BackoffStrategy.Exponential ?: BackoffStrategy.Exponential()
+      policy = policy.copy(
+        retryTopicBackoff = exp.copy(
+          initialDelay = retryTopicBackoffMs?.milliseconds ?: exp.initialDelay,
+          multiplier = retryTopicBackoffMultiplier ?: exp.multiplier,
+          maxDelay = maxRetryTopicBackoffMs?.milliseconds ?: exp.maxDelay
+        )
+      )
+    }
+
+    return policy
+  }
+
   companion object {
     /**
      * No retries - fail immediately to DLT.
@@ -375,7 +439,8 @@ class RetryableProcessor<K : Any, V : Any>(
     }
 
     // Check max message age (from original timestamp)
-    if (policy.maxMessageAge != null) {
+    // Only check if timestamp is valid (>= 0, as ConsumerRecord.NO_TIMESTAMP is -1)
+    if (policy.maxMessageAge != null && record.timestamp() >= 0) {
       val messageAge = now - record.timestamp()
       if (messageAge > policy.maxMessageAge.inWholeMilliseconds) {
         return TtlCheckResult.Expired(

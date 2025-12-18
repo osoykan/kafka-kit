@@ -126,6 +126,7 @@ data class ListenerConfig(
  * Supports subscribing to one or multiple topics.
  *
  * @property topics List of topic names to subscribe to
+ * @property groupId Override default consumer group ID
  * @property concurrency Override default processing concurrency for this topic.
  *   Controls how many records from this topic are processed in parallel.
  * @property multiplePartitions Override default partition consumers for this topic.
@@ -133,25 +134,46 @@ data class ListenerConfig(
  * @property pollTimeout Override default poll timeout for this topic
  * @property retryTopic Optional retry topic name
  * @property dltTopic Optional dead letter topic name
- * @property maxRetries Maximum retry attempts before sending to DLT
- * @property retryBackoff Backoff duration between retries
+ * @property maxRetryTopicAttempts Maximum number of retry topic attempts before sending to DLT
+ * @property retryTopicBackoffMs Initial backoff delay in milliseconds for retry topic processing
+ * @property retryTopicBackoffMultiplier Multiplier for retry topic exponential backoff
+ * @property maxRetryTopicBackoffMs Maximum backoff delay in milliseconds for retry topic
+ * @property maxInMemoryRetries Maximum number of in-memory retries before sending to retry topic
+ * @property backoffMs Initial backoff delay in milliseconds for in-memory retries
+ * @property backoffMultiplier Multiplier for in-memory exponential backoff
+ * @property maxBackoffMs Maximum backoff delay in milliseconds for in-memory retries
+ * @property maxRetryDurationMs Maximum total retry duration in milliseconds
+ * @property maxMessageAgeMs Maximum message age in milliseconds from original timestamp
  */
 data class TopicConfig(
-  val topics: List<String>,
+  val topics: List<String> = emptyList(),
+  val groupId: String? = null,
   val concurrency: Int? = null,
   val multiplePartitions: Int? = null,
   val pollTimeout: Duration? = null,
   val retryTopic: String? = null,
   val dltTopic: String? = null,
-  val maxRetries: Int = 3,
-  val retryBackoff: Duration = 1.seconds
+  // Retry Topic settings
+  val maxRetryTopicAttempts: Int? = null,
+  val retryTopicBackoffMs: Long? = null,
+  val retryTopicBackoffMultiplier: Double? = null,
+  val maxRetryTopicBackoffMs: Long? = null,
+  // In-memory retry settings
+  val maxInMemoryRetries: Int? = null,
+  val backoffMs: Long? = null,
+  val backoffMultiplier: Double? = null,
+  val maxBackoffMs: Long? = null,
+  // TTL settings
+  val maxRetryDurationMs: Long? = null,
+  val maxMessageAgeMs: Long? = null
 ) {
   init {
-    require(topics.isNotEmpty()) { "At least one topic name must be provided" }
+    // Only require topics if we're not just doing a partial override
+    // (though in practice topics should usually be provided)
   }
 
   /**
-   * Primary constructor for single topic (backward compatibility).
+   * Primary constructor for single topic.
    */
   constructor(
     name: String,
@@ -169,8 +191,8 @@ data class TopicConfig(
     pollTimeout = pollTimeout,
     retryTopic = retryTopic,
     dltTopic = dltTopic,
-    maxRetries = maxRetries,
-    retryBackoff = retryBackoff
+    maxInMemoryRetries = maxRetries,
+    backoffMs = retryBackoff.inWholeMilliseconds
   )
 
   /**
@@ -204,6 +226,46 @@ data class TopicConfig(
    * Gets the effective poll timeout, using topic-specific or default.
    */
   fun effectivePollTimeout(default: Duration): Duration = pollTimeout ?: default
+
+  /**
+   * Merges another [TopicConfig] into this one. Fields in the [override] take priority
+   * if they are not null (or not empty for lists).
+   */
+  fun mergeWith(override: TopicConfig): TopicConfig = copy(
+    topics = if (override.topics.isNotEmpty()) override.topics else topics,
+    groupId = override.groupId ?: groupId,
+    concurrency = override.concurrency ?: concurrency,
+    multiplePartitions = override.multiplePartitions ?: multiplePartitions,
+    pollTimeout = override.pollTimeout ?: pollTimeout,
+    retryTopic = override.retryTopic ?: retryTopic,
+    dltTopic = override.dltTopic ?: dltTopic,
+    maxRetryTopicAttempts = override.maxRetryTopicAttempts ?: maxRetryTopicAttempts,
+    retryTopicBackoffMs = override.retryTopicBackoffMs ?: retryTopicBackoffMs,
+    retryTopicBackoffMultiplier = override.retryTopicBackoffMultiplier ?: retryTopicBackoffMultiplier,
+    maxRetryTopicBackoffMs = override.maxRetryTopicBackoffMs ?: maxRetryTopicBackoffMs,
+    maxInMemoryRetries = override.maxInMemoryRetries ?: maxInMemoryRetries,
+    backoffMs = override.backoffMs ?: backoffMs,
+    backoffMultiplier = override.backoffMultiplier ?: backoffMultiplier,
+    maxBackoffMs = override.maxBackoffMs ?: maxBackoffMs,
+    maxRetryDurationMs = override.maxRetryDurationMs ?: maxRetryDurationMs,
+    maxMessageAgeMs = override.maxMessageAgeMs ?: maxMessageAgeMs
+  )
+
+  /**
+   * Converts this [TopicConfig] to a [RetryPolicy] using the provided [base] as a template.
+   */
+  fun toRetryPolicy(base: RetryPolicy): RetryPolicy = base.updateFrom(
+    maxInMemoryRetries = maxInMemoryRetries,
+    maxRetryTopicAttempts = maxRetryTopicAttempts,
+    maxRetryDurationMs = maxRetryDurationMs,
+    maxMessageAgeMs = maxMessageAgeMs,
+    backoffMs = backoffMs,
+    backoffMultiplier = backoffMultiplier,
+    maxBackoffMs = maxBackoffMs,
+    retryTopicBackoffMs = retryTopicBackoffMs,
+    retryTopicBackoffMultiplier = retryTopicBackoffMultiplier,
+    maxRetryTopicBackoffMs = maxRetryTopicBackoffMs
+  )
 
   companion object {
     /**

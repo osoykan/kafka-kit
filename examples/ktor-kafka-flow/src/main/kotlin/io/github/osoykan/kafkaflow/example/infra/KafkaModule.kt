@@ -36,7 +36,7 @@ fun kafkaModule(config: AppConfig): Module = module {
           pollTimeout = config.kafka.consumer.pollTimeout
         ),
         metrics = get(),
-        topicResolver = TopicResolver(
+        topicResolver = DefaultTopicResolver(
           defaultRetryPolicy = RetryPolicy.DEFAULT
         )
       )
