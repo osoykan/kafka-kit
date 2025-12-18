@@ -110,11 +110,13 @@ class SpringKafkaPoller<K : Any, V : Any>(
   ): Flow<AckableRecord<K, V>> {
     lateinit var backpressure: BackpressureController
 
-    // Create ordered committer for this topic with configured commit strategy
+    // Create ordered committer for this topic with per-topic commit strategy
+    // (falls back to listenerConfig.commitStrategy if topic doesn't specify one)
+    val effectiveCommitStrategy = topic.effectiveCommitStrategy(listenerConfig.commitStrategy)
     val orderedCommitter = OrderedCommitter(
-      commitStrategy = listenerConfig.commitStrategy,
+      commitStrategy = effectiveCommitStrategy,
       onCommit = { partition, offset ->
-        logger.debug { "OrderedCommitter: Committed partition $partition up to offset $offset" }
+        logger.debug { "OrderedCommitter[$effectiveCommitStrategy]: Committed partition $partition up to offset $offset" }
       }
     )
     val commitChannel = createCommitChannel()

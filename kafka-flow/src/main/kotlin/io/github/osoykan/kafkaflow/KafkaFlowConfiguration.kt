@@ -153,6 +153,9 @@ data class TopicConfig(
   val pollTimeout: Duration? = null,
   val retryTopic: String? = null,
   val dltTopic: String? = null,
+  // Commit strategy settings (null = use ListenerConfig default)
+  val commitSize: Int? = null,
+  val commitIntervalMs: Long? = null,
   // Retry Topic settings
   val maxRetryTopicAttempts: Int? = null,
   val retryTopicBackoffMs: Long? = null,
@@ -228,6 +231,36 @@ data class TopicConfig(
   fun effectivePollTimeout(default: Duration): Duration = pollTimeout ?: default
 
   /**
+   * Gets the effective commit strategy for this topic.
+   *
+   * Resolution order:
+   * 1. If both commitSize and commitIntervalMs are set → BySizeOrTime
+   * 2. If only commitSize is set → BySize
+   * 3. If only commitIntervalMs is set → ByTime
+   * 4. If neither is set → use the provided default from ListenerConfig
+   *
+   * @param default The default commit strategy from ListenerConfig
+   * @return The effective commit strategy for this topic
+   */
+  fun effectiveCommitStrategy(default: CommitStrategy): CommitStrategy = when {
+    commitSize != null && commitIntervalMs != null -> {
+      CommitStrategy.BySizeOrTime(commitSize, commitIntervalMs.milliseconds)
+    }
+
+    commitSize != null -> {
+      CommitStrategy.BySize(commitSize)
+    }
+
+    commitIntervalMs != null -> {
+      CommitStrategy.ByTime(commitIntervalMs.milliseconds)
+    }
+
+    else -> {
+      default
+    }
+  }
+
+  /**
    * Merges another [TopicConfig] into this one. Fields in the [override] take priority
    * if they are not null (or not empty for lists).
    */
@@ -239,6 +272,8 @@ data class TopicConfig(
     pollTimeout = override.pollTimeout ?: pollTimeout,
     retryTopic = override.retryTopic ?: retryTopic,
     dltTopic = override.dltTopic ?: dltTopic,
+    commitSize = override.commitSize ?: commitSize,
+    commitIntervalMs = override.commitIntervalMs ?: commitIntervalMs,
     maxRetryTopicAttempts = override.maxRetryTopicAttempts ?: maxRetryTopicAttempts,
     retryTopicBackoffMs = override.retryTopicBackoffMs ?: retryTopicBackoffMs,
     retryTopicBackoffMultiplier = override.retryTopicBackoffMultiplier ?: retryTopicBackoffMultiplier,

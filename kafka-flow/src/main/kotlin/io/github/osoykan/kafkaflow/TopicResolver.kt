@@ -45,6 +45,15 @@ annotation class KafkaTopic(
   val concurrency: Int = 1,
   /** Number of Kafka consumer threads/partitions (container concurrency) */
   val multiplePartitions: Int = 1,
+  /**
+   * Commit batch size (-1 = use ListenerConfig default).
+   * - Set only commitSize for BySize strategy
+   * - Set both commitSize and commitIntervalMs for BySizeOrTime strategy
+   * - Set only commitIntervalMs for ByTime strategy
+   */
+  val commitSize: Int = -1,
+  /** Commit interval in milliseconds (-1 = use ListenerConfig default) */
+  val commitIntervalMs: Long = -1,
   /** Maximum number of in-memory retries before sending to retry topic */
   val maxInMemoryRetries: Int = 3,
   /** Initial backoff delay in milliseconds for in-memory retries */
@@ -199,7 +208,9 @@ class DefaultTopicResolver(
       concurrency = annotation.concurrency,
       multiplePartitions = annotation.multiplePartitions,
       retryTopic = annotation.retry.takeIf { it.isNotBlank() },
-      dltTopic = annotation.dlt.takeIf { it.isNotBlank() }
+      dltTopic = annotation.dlt.takeIf { it.isNotBlank() },
+      commitSize = annotation.commitSize.takeIf { it > 0 },
+      commitIntervalMs = annotation.commitIntervalMs.takeIf { it > 0 }
     )
 
     val retryPolicy = RetryPolicy(
