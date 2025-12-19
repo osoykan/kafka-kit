@@ -8,52 +8,11 @@ import kotlinx.coroutines.flow.*
 import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.listener.*
-import org.springframework.kafka.support.Acknowledgment
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
-
-/**
- * Controls backpressure by pausing/resuming the Kafka container based on buffer fill level.
- */
-private class BackpressureController(
-  private val containerProvider: () -> ConcurrentMessageListenerContainer<*, *>,
-  private val config: BackpressureConfig,
-  private val bufferCapacity: Int,
-  private val topicName: String
-) {
-  private val bufferCount = AtomicInteger(0)
-  private val paused = AtomicBoolean(false)
-
-  private val pauseThresholdCount = (bufferCapacity * config.pauseThreshold).toInt()
-  private val resumeThresholdCount = (bufferCapacity * config.resumeThreshold).toInt()
-
-  private val container: ConcurrentMessageListenerContainer<*, *>
-    get() = containerProvider()
-
-  fun onBufferAdd() {
-    if (!config.enabled) return
-
-    val count = bufferCount.incrementAndGet()
-    if (count >= pauseThresholdCount && paused.compareAndSet(false, true)) {
-      container.pause()
-      logger.info { "Backpressure: Paused container for $topicName (buffer: $count/$bufferCapacity)" }
-    }
-  }
-
-  fun onBufferConsume() {
-    if (!config.enabled) return
-
-    val count = bufferCount.decrementAndGet()
-    if (count <= resumeThresholdCount && paused.compareAndSet(true, false)) {
-      container.resume()
-      logger.info { "Backpressure: Resumed container for $topicName (buffer: $count/$bufferCapacity)" }
-    }
-  }
-}
 
 /**
  * Spring Kafka based poller using ConcurrentMessageListenerContainer.
@@ -91,7 +50,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
   private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : KafkaPoller<K, V> {
   private val containers = ConcurrentHashMap<String, ConcurrentMessageListenerContainer<K, V>>()
-  private val committers = ConcurrentHashMap<String, Pair<OrderedCommitter, Channel<CompletionEvent>>>()
+  private val committers = ConcurrentHashMap<String, CommitterContext>()
   private val stopped = AtomicBoolean(false)
 
   override fun poll(
@@ -99,28 +58,25 @@ class SpringKafkaPoller<K : Any, V : Any>(
     bufferCapacity: Int
   ): Flow<AckableRecord<K, V>> = pollWithOrderedCommits(topic, bufferCapacity)
 
+  override fun stop() {
+    if (stopped.compareAndSet(false, true)) {
+      logger.info { "SpringKafkaPoller: Stopping all consumers (${containers.size} active)" }
+      stopAllContainers()
+      flushAndCloseCommitters()
+    }
+  }
+
+  override fun isStopped(): Boolean = stopped.get()
+
   /**
    * Polls Kafka with ordered commits using [OrderedCommitter].
-   * User's acknowledge() calls go through the committer to ensure
-   * offsets are committed in order.
    */
   private fun pollWithOrderedCommits(
     topic: TopicConfig,
     bufferCapacity: Int
   ): Flow<AckableRecord<K, V>> {
-    lateinit var backpressure: BackpressureController
-
-    // Create ordered committer for this topic with per-topic commit strategy
-    // (falls back to listenerConfig.commitStrategy if topic doesn't specify one)
-    val effectiveCommitStrategy = topic.effectiveCommitStrategy(listenerConfig.commitStrategy)
-    val orderedCommitter = OrderedCommitter(
-      commitStrategy = effectiveCommitStrategy,
-      onCommit = { partition, offset ->
-        logger.debug { "OrderedCommitter[$effectiveCommitStrategy]: Committed partition $partition up to offset $offset" }
-      }
-    )
-    val commitChannel = createCommitChannel()
-    committers[topic.displayName] = orderedCommitter to commitChannel
+    val committerContext = createCommitterContext(topic)
+    committers[topic.displayName] = committerContext
 
     return callbackFlow {
       if (stopped.get()) {
@@ -128,128 +84,80 @@ class SpringKafkaPoller<K : Any, V : Any>(
         return@callbackFlow
       }
 
-      // Launch committer job in background
-      val committerJob = launch {
-        orderedCommitter.processChannel(commitChannel)
-      }
+      val committerJob = launch { committerContext.process() }
+      val containerContext = createAndStartContainer(topic, bufferCapacity, committerContext.channel)
 
-      // Create backpressure controller with lazy container reference
-      val containerRef = object {
-        lateinit var container: ConcurrentMessageListenerContainer<K, V>
-      }
-      backpressure = BackpressureController(
-        containerProvider = { containerRef.container },
-        config = listenerConfig.backpressure,
-        bufferCapacity = bufferCapacity,
-        topicName = topic.displayName
-      )
-
-      // Create acknowledging listener - always use MANUAL mode internally
-      // so we can control commit order via OrderedCommitter
-      val listener = AcknowledgingMessageListener<K, V> { record, ack ->
-        if (ack != null) {
-          val ackableRecord = AckableRecord(
-            record = record,
-            acknowledge = {
-              // Send to ordered committer instead of direct ack
-              val event = CompletionEvent(
-                partition = record.partition(),
-                offset = record.offset(),
-                acknowledge = { ack.acknowledge() }
-              )
-              val result = commitChannel.trySend(event)
-              if (result.isFailure) {
-                logger.warn {
-                  "Failed to send completion event for ${record.topic()}:${record.partition()}:${record.offset()}"
-                }
-                // Fallback to direct ack if channel fails (shouldn't happen with UNLIMITED)
-                ack.acknowledge()
-              }
-            }
-          )
-          trySendBlocking(ackableRecord)
-            .onSuccess {
-              backpressure.onBufferAdd()
-            }.onFailure { exception ->
-              if (exception !is CancellationException) {
-                logger.error(exception) { "Failed to emit record from topic ${record.topic()}: ${record.key()}" }
-              }
-            }
-        }
-      }
-
-      // Create container with MANUAL_IMMEDIATE mode
-      val containerProps = createContainerProperties(topic)
-      containerProps.setMessageListener(listener)
-      val container = createContainer(topic, containerProps)
-      containerRef.container = container
-      containers[topic.displayName] = container
-
-      logger.info {
-        "SpringKafkaPoller: Starting consumer for topics: [${topic.displayName}], " +
-          "partitions: ${container.concurrency}, " +
-          "backpressure: ${if (listenerConfig.backpressure.enabled) "enabled" else "disabled"}, " +
-          "orderedCommits: enabled"
-      }
-      container.start()
+      logStartup(topic, containerContext.container)
 
       awaitClose {
-        logger.info { "SpringKafkaPoller: Stopping consumer for topics: [${topic.displayName}]" }
-        container.stop()
-        containers.remove(topic.displayName)
-
-        // Shutdown committer
-        commitChannel.close()
-        runBlocking { committerJob.join() }
-        orderedCommitter.flush() // Ensure all pending are committed
-        committers.remove(topic.displayName)
-        logger.info { "SpringKafkaPoller: Ordered committer stopped for [${topic.displayName}]" }
+        shutdownContainer(topic, containerContext, committerJob, committerContext)
       }
     }.buffer(bufferCapacity)
-      .onEach { backpressure.onBufferConsume() }
+      .onEach { containerContext -> }
+      .let { flow -> applyBackpressure(flow, topic, bufferCapacity) }
       .flowOn(dispatcher)
   }
 
-  override fun stop() {
-    if (stopped.compareAndSet(false, true)) {
-      logger.info { "SpringKafkaPoller: Stopping all consumers (${containers.size} active)" }
+  // region Container Management
 
-      // Stop containers first
-      containers.values.forEach { container ->
-        try {
-          container.stop()
-        } catch (e: Exception) {
-          logger.error(e) { "Error stopping container" }
-        }
-      }
-      containers.clear()
+  private data class ContainerContext<K : Any, V : Any>(
+    val container: ConcurrentMessageListenerContainer<K, V>,
+    val backpressure: BackpressureController
+  )
 
-      // Stop and flush all ordered committers
-      committers.forEach { (topic, pair) ->
-        val (committer, channel) = pair
-        try {
-          channel.close()
-          committer.flush()
-          logger.info { "SpringKafkaPoller: Flushed ordered committer for [$topic]" }
-        } catch (e: Exception) {
-          logger.error(e) { "Error flushing committer for [$topic]" }
-        }
-      }
-      committers.clear()
+  private fun ProducerScope<AckableRecord<K, V>>.createAndStartContainer(
+    topic: TopicConfig,
+    bufferCapacity: Int,
+    commitChannel: Channel<CompletionEvent>
+  ): ContainerContext<K, V> {
+    val containerRef = ContainerRef<K, V>()
+
+    val backpressure = BackpressureController(
+      containerProvider = { containerRef.get() },
+      config = listenerConfig.backpressure,
+      bufferCapacity = bufferCapacity,
+      topicName = topic.displayName
+    )
+
+    val listener = createListener(commitChannel, backpressure)
+    val containerProps = createContainerProperties(topic).apply {
+      setMessageListener(listener)
     }
+
+    val container = createContainer(topic, containerProps)
+    containerRef.set(container)
+    containers[topic.displayName] = container
+    container.start()
+
+    return ContainerContext(container, backpressure)
   }
 
-  override fun isStopped(): Boolean = stopped.get()
+  private fun ProducerScope<AckableRecord<K, V>>.createListener(
+    commitChannel: Channel<CompletionEvent>,
+    backpressure: BackpressureController
+  ): AcknowledgingMessageListener<K, V> = AcknowledgingListenerFactory.create(
+    commitChannel = commitChannel,
+    sendToFlow = { record ->
+      trySendBlocking(record).let { channelResult ->
+        if (channelResult.isSuccess) {
+          Result.success(Unit)
+        } else {
+          Result.failure(channelResult.exceptionOrNull() ?: Exception("Channel send failed"))
+        }
+      }
+    },
+    onRecordEmitted = { backpressure.onBufferAdd() }
+  )
 
   private fun createContainerProperties(topic: TopicConfig): ContainerProperties =
-    ContainerProperties(*topic.topics.toTypedArray()).also { props ->
-      props.pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
+    ContainerProperties(*topic.topics.toTypedArray()).apply {
+      pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
       // Always use MANUAL_IMMEDIATE - OrderedCommitter handles commit ordering
-      props.ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
-      props.idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
-      props.isSyncCommits = true
-      props.syncCommitTimeout = Duration.ofSeconds(5)
-      configureVirtualThreads(props, topic)
+      ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
+      idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
+      isSyncCommits = true
+      syncCommitTimeout = Duration.ofSeconds(5)
+      configureVirtualThreads(this, topic)
     }
 
   private fun configureVirtualThreads(props: ContainerProperties, topic: TopicConfig) {
@@ -266,4 +174,119 @@ class SpringKafkaPoller<K : Any, V : Any>(
       concurrency = topic.effectiveMultiplePartitions(listenerConfig.multiplePartitions)
       errorHandler?.let { commonErrorHandler = it }
     }
+
+  // endregion
+
+  // region Committer Management
+
+  private data class CommitterContext(
+    val committer: OrderedCommitter,
+    val channel: Channel<CompletionEvent>
+  ) {
+    suspend fun process() = committer.processChannel(channel)
+
+    fun flush() {
+      channel.close()
+      committer.flush()
+    }
+  }
+
+  private fun createCommitterContext(topic: TopicConfig): CommitterContext {
+    val effectiveCommitStrategy = topic.effectiveCommitStrategy(listenerConfig.commitStrategy)
+    val orderedCommitter = OrderedCommitter(
+      commitStrategy = effectiveCommitStrategy,
+      onCommit = { partition, offset ->
+        logger.debug { "OrderedCommitter[$effectiveCommitStrategy]: Committed partition $partition up to offset $offset" }
+      }
+    )
+    return CommitterContext(orderedCommitter, createCommitChannel())
+  }
+
+  // endregion
+
+  // region Lifecycle
+
+  private fun stopAllContainers() {
+    containers.values.forEach { container ->
+      runCatching { container.stop() }
+        .onFailure { e -> logger.error(e) { "Error stopping container" } }
+    }
+    containers.clear()
+  }
+
+  private fun flushAndCloseCommitters() {
+    committers.forEach { (topic, context) ->
+      runCatching { context.flush() }
+        .onSuccess { logger.info { "SpringKafkaPoller: Flushed ordered committer for [$topic]" } }
+        .onFailure { e -> logger.error(e) { "Error flushing committer for [$topic]" } }
+    }
+    committers.clear()
+  }
+
+  private fun shutdownContainer(
+    topic: TopicConfig,
+    containerContext: ContainerContext<K, V>,
+    committerJob: Job,
+    committerContext: CommitterContext
+  ) {
+    logger.info { "SpringKafkaPoller: Stopping consumer for topics: [${topic.displayName}]" }
+
+    containerContext.container.stop()
+    containers.remove(topic.displayName)
+
+    committerContext.channel.close()
+    runBlocking { committerJob.join() }
+    committerContext.committer.flush()
+    committers.remove(topic.displayName)
+
+    logger.info { "SpringKafkaPoller: Ordered committer stopped for [${topic.displayName}]" }
+  }
+
+  private fun <K : Any, V : Any> applyBackpressure(
+    flow: Flow<AckableRecord<K, V>>,
+    topic: TopicConfig,
+    bufferCapacity: Int
+  ): Flow<AckableRecord<K, V>> {
+    // Create a shared backpressure tracker for onEach consumption
+    val containerRef = containers[topic.displayName]
+    if (containerRef == null) return flow
+
+    val backpressure = BackpressureController(
+      containerProvider = { containerRef },
+      config = listenerConfig.backpressure,
+      bufferCapacity = bufferCapacity,
+      topicName = topic.displayName
+    )
+
+    return flow.onEach { backpressure.onBufferConsume() }
+  }
+
+  // endregion
+
+  // region Logging
+
+  private fun logStartup(topic: TopicConfig, container: ConcurrentMessageListenerContainer<K, V>) {
+    logger.info {
+      "SpringKafkaPoller: Starting consumer for topics: [${topic.displayName}], " +
+        "partitions: ${container.concurrency}, " +
+        "backpressure: ${if (listenerConfig.backpressure.enabled) "enabled" else "disabled"}, " +
+        "orderedCommits: enabled"
+    }
+  }
+
+  // endregion
+}
+
+/**
+ * Thread-safe holder for late-initialized container reference.
+ */
+private class ContainerRef<K : Any, V : Any> {
+  @Volatile
+  private lateinit var container: ConcurrentMessageListenerContainer<K, V>
+
+  fun set(c: ConcurrentMessageListenerContainer<K, V>) {
+    container = c
+  }
+
+  fun get(): ConcurrentMessageListenerContainer<K, V> = container
 }
