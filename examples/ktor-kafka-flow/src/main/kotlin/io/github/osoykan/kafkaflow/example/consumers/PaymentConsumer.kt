@@ -29,6 +29,8 @@ private val logger = KotlinLogging.logger {}
   backoffMs = 200,
   backoffMultiplier = 2.0,
   maxBackoffMs = 10_000,
+  commitSize = 1,
+  commitIntervalMs = 100,
   classifier = ClassifierType.ALWAYS_RETRY // Retry everything for payments
 )
 class PaymentConsumer : ConsumerManualAck<String, PaymentEvent> {

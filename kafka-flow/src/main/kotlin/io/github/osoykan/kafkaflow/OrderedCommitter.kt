@@ -28,6 +28,27 @@ data class CompletionEvent(
 )
 
 /**
+ * Result of a commit operation.
+ *
+ * @property commits Map of partition to highest committed offset (empty if nothing committed)
+ */
+@JvmInline
+value class CommitResult(
+  val commits: Map<Int, Long>
+) {
+  val isEmpty: Boolean get() = commits.isEmpty()
+  val isNotEmpty: Boolean get() = commits.isNotEmpty()
+
+  inline fun forEach(action: (partition: Int, offset: Long) -> Unit) {
+    commits.forEach { (partition, offset) -> action(partition, offset) }
+  }
+
+  companion object {
+    val Empty = CommitResult(emptyMap())
+  }
+}
+
+/**
  * Tracks uncommitted offsets for a batch commit.
  *
  * Uses [Mutex] for coroutine-friendly synchronization instead of @Synchronized.
@@ -71,15 +92,15 @@ internal class CommitBatch {
    * Commits all contiguous offsets for all partitions.
    * Only acknowledges the highest contiguous offset per partition (Kafka semantics).
    *
-   * @return Map of partition to highest committed offset, or null if nothing was committed
+   * @return CommitResult with map of partition to highest committed offset
    */
-  suspend fun commitContiguous(): Map<Int, Long>? = mutex.withLock {
+  suspend fun commitContiguous(): CommitResult = mutex.withLock {
     val committed = mutableMapOf<Int, Long>()
 
     partitions.forEach { (partition, state) ->
       val highestContiguous = findHighestContiguous(state)
 
-      if (highestContiguous != null && highestContiguous > state.lastCommitted) {
+      if (highestContiguous >= 0 && highestContiguous > state.lastCommitted) {
         // Get ack for highest offset before cleanup
         val highestAck = state.pendingAcks[highestContiguous]
 
@@ -100,15 +121,16 @@ internal class CommitBatch {
       }
     }
 
-    committed.ifEmpty { null }
+    CommitResult(committed)
   }
 
   /**
    * Finds the highest contiguous offset from lastCommitted.
+   * @return highest contiguous offset, or -1 if none found
    */
-  private fun findHighestContiguous(state: PartitionState): Long? {
+  private fun findHighestContiguous(state: PartitionState): Long {
     var nextExpected = state.lastCommitted + 1
-    var highest: Long? = null
+    var highest = -1L
 
     while (state.completed.contains(nextExpected)) {
       highest = nextExpected
@@ -122,25 +144,23 @@ internal class CommitBatch {
    * Force commits the highest pending offset per partition (even with gaps).
    * Use during shutdown to prevent stuck records.
    */
-  suspend fun flush(): Map<Int, Long>? = mutex.withLock {
+  suspend fun flush(): CommitResult = mutex.withLock {
     val flushed = mutableMapOf<Int, Long>()
 
     partitions.forEach { (partition, state) ->
       if (state.pendingAcks.isNotEmpty()) {
-        val maxOffset = state.pendingAcks.keys.maxOrNull()
-        if (maxOffset != null) {
-          state.pendingAcks[maxOffset]?.invoke()
-          state.pendingAcks.clear()
-          state.completed.clear()
-          state.lastCommitted = maxOffset
-          flushed[partition] = maxOffset
-          logger.warn { "Partition $partition: flushed up to $maxOffset (may have gaps!)" }
-        }
+        val maxOffset = state.pendingAcks.keys.max()
+        state.pendingAcks[maxOffset]?.invoke()
+        state.pendingAcks.clear()
+        state.completed.clear()
+        state.lastCommitted = maxOffset
+        flushed[partition] = maxOffset
+        logger.warn { "Partition $partition: flushed up to $maxOffset (may have gaps!)" }
       }
     }
 
     count.set(0)
-    flushed.ifEmpty { null }
+    CommitResult(flushed)
   }
 
   /**
@@ -213,9 +233,9 @@ class OrderedCommitter(
    * For other strategies, signals the commit manager.
    *
    * @param event The completion event with partition, offset, and ack callback
-   * @return The committed offsets map, or null if no commit was made
+   * @return The committed offsets (empty if no commit was made)
    */
-  suspend fun onComplete(event: CompletionEvent): Map<Int, Long>? {
+  suspend fun onComplete(event: CompletionEvent): CommitResult {
     val count = batch.addCompletion(event)
 
     return when (commitStrategy) {
@@ -223,13 +243,13 @@ class OrderedCommitter(
         if (count >= commitStrategy.size) {
           doCommit()
         } else {
-          null
+          CommitResult.Empty
         }
       }
 
       is CommitStrategy.ByTime -> {
         // Timer handles commits via commit manager
-        null
+        CommitResult.Empty
       }
 
       is CommitStrategy.BySizeOrTime -> {
@@ -238,7 +258,7 @@ class OrderedCommitter(
           batchSignal.trySend(Unit)
         }
         // Actual commit happens in commit manager
-        null
+        CommitResult.Empty
       }
     }
   }
@@ -246,10 +266,10 @@ class OrderedCommitter(
   /**
    * Performs the commit operation.
    */
-  private suspend fun doCommit(): Map<Int, Long>? {
-    val committed = batch.commitContiguous()
-    committed?.forEach { (partition, offset) -> onCommit(partition, offset) }
-    return committed
+  private suspend fun doCommit(): CommitResult {
+    val result = batch.commitContiguous()
+    result.forEach { partition, offset -> onCommit(partition, offset) }
+    return result
   }
 
   /**
@@ -330,8 +350,8 @@ class OrderedCommitter(
    * Use this during shutdown.
    */
   suspend fun flush() {
-    val flushed = batch.flush()
-    flushed?.forEach { (partition, offset) -> onCommit(partition, offset) }
+    val result = batch.flush()
+    result.forEach { partition, offset -> onCommit(partition, offset) }
     stop()
   }
 

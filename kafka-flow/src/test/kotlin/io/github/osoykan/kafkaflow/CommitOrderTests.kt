@@ -280,11 +280,11 @@ class CommitOrderTests :
       // After 4: completed={4}, lastCommitted=2 → can't commit (gap at 3)
       // After 3: completed={3,4}, lastCommitted=2 → commit up to 4 (only ack 4), lastCommitted=4
 
-      results[0] shouldBe null // Offset 2: waiting for 0,1
-      results[1]?.get(0) shouldBe 0L // Offset 0: commit 0
-      results[2]?.get(0) shouldBe 2L // Offset 1: commit up to 2
-      results[3] shouldBe null // Offset 4: waiting for 3
-      results[4]?.get(0) shouldBe 4L // Offset 3: commit up to 4
+      results[0].isEmpty shouldBe true // Offset 2: waiting for 0,1
+      results[1].commits[0] shouldBe 0L // Offset 0: commit 0
+      results[2].commits[0] shouldBe 2L // Offset 1: commit up to 2
+      results[3].isEmpty shouldBe true // Offset 4: waiting for 3
+      results[4].commits[0] shouldBe 4L // Offset 3: commit up to 4
 
       // Only highest contiguous offsets were ack'd (optimization: single commit per batch)
       // In Kafka, committing offset N means "processed up to N" so we don't need to commit intermediates
@@ -297,14 +297,14 @@ class CommitOrderTests :
       val ackCalls = CopyOnWriteArrayList<Long>()
 
       // Add 2 records - should not commit yet
-      committer.onComplete(CompletionEvent(0, 0L) { ackCalls.add(0L) }) shouldBe null
-      committer.onComplete(CompletionEvent(0, 1L) { ackCalls.add(1L) }) shouldBe null
+      committer.onComplete(CompletionEvent(0, 0L) { ackCalls.add(0L) }).isEmpty shouldBe true
+      committer.onComplete(CompletionEvent(0, 1L) { ackCalls.add(1L) }).isEmpty shouldBe true
 
       ackCalls shouldHaveSize 0 // No commits yet
 
       // 3rd record triggers commit
       val result = committer.onComplete(CompletionEvent(0, 2L) { ackCalls.add(2L) })
-      result?.get(0) shouldBe 2L
+      result.commits[0] shouldBe 2L
 
       // Only highest offset ack'd
       ackCalls shouldContainExactly listOf(2L)
@@ -314,13 +314,13 @@ class CommitOrderTests :
       val committer = OrderedCommitter(commitStrategy = CommitStrategy.BySize(1))
 
       // Partition 0: offsets 1, 0 (out of order)
-      committer.onComplete(CompletionEvent(0, 1L) {}) shouldBe null
-      committer.onComplete(CompletionEvent(0, 0L) {})?.get(0) shouldBe 1L
+      committer.onComplete(CompletionEvent(0, 1L) {}).isEmpty shouldBe true
+      committer.onComplete(CompletionEvent(0, 0L) {}).commits[0] shouldBe 1L
 
       // Partition 1: offsets 0, 2, 1 (out of order)
-      committer.onComplete(CompletionEvent(1, 0L) {})?.get(1) shouldBe 0L
-      committer.onComplete(CompletionEvent(1, 2L) {}) shouldBe null
-      committer.onComplete(CompletionEvent(1, 1L) {})?.get(1) shouldBe 2L
+      committer.onComplete(CompletionEvent(1, 0L) {}).commits[1] shouldBe 0L
+      committer.onComplete(CompletionEvent(1, 2L) {}).isEmpty shouldBe true
+      committer.onComplete(CompletionEvent(1, 1L) {}).commits[1] shouldBe 2L
 
       val stats = committer.getStats()
       stats[0]?.lastCommitted shouldBe 1L // Partition 0 last committed: 1
