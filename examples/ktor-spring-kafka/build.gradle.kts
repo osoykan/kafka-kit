@@ -30,14 +30,12 @@ dependencies {
   implementation(libs.kotlin.logging)
   implementation(libs.logback.classic)
 
-  // Jackson
-  implementation(libs.jackson.module.kotlin)
-  implementation(libs.jackson.datatype.jsr310)
-
   // Coroutines
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.kotlinx.coroutines.jdk8)
   implementation(libs.kotlinx.coroutines.reactor) // Required for Spring Kafka suspend support
+  implementation(projects.examples.shared)
+  implementation(libs.jackson3.kotlin)
 
   // Testing
   testImplementation(libs.kotest.runner.junit5)

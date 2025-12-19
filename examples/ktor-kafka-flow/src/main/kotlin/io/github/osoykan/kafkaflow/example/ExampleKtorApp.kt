@@ -1,17 +1,11 @@
 package io.github.osoykan.kafkaflow.example
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.SerializationFeature
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.sksamuel.hoplite.ConfigLoaderBuilder
-import com.sksamuel.hoplite.ExperimentalHoplite
-import com.sksamuel.hoplite.addCommandLineSource
-import com.sksamuel.hoplite.addResourceSource
+import com.fasterxml.jackson.databind.*
+import com.sksamuel.hoplite.*
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.example.api.configureRouting
 import io.github.osoykan.kafkaflow.example.config.AppConfig
-import io.github.osoykan.kafkaflow.example.infra.configureConsumerEngine
-import io.github.osoykan.kafkaflow.example.infra.kafkaModule
+import io.github.osoykan.kafkaflow.example.infra.*
 import io.ktor.http.*
 import io.ktor.serialization.jackson.*
 import io.ktor.server.application.*
@@ -81,7 +75,6 @@ fun Application.appModule(
   install(AutoHeadResponse)
   install(ContentNegotiation) {
     jackson {
-      registerModule(JavaTimeModule())
       disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
       disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     }

@@ -9,11 +9,11 @@ testcontainers = "2.0.3"
 ktor = "3.3.3"
 koin = "4.1.1"
 hoplite = "2.9.0"
-jackson = "2.20.1"
 spotless = "8.1.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
 stove = "0.19.0"
+jackson3 = "3.0.3"
 
 [libraries]
 # Spring Kafka
@@ -52,8 +52,7 @@ hoplite-core = { module = "com.sksamuel.hoplite:hoplite-core", version.ref = "ho
 hoplite-yaml = { module = "com.sksamuel.hoplite:hoplite-yaml", version.ref = "hoplite" }
 
 # Jackson (for examples)
-jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }
-jackson-datatype-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310", version.ref = "jackson" }
+jackson3-kotlin = { module = "tools.jackson.module:jackson-module-kotlin", version.ref = "jackson3" }
 
 # Code formatting
 ktlint-cli = { module = "com.pinterest.ktlint:ktlint-cli", version.ref = "ktlint" }

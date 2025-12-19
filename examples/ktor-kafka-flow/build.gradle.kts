@@ -31,8 +31,7 @@ dependencies {
   implementation(libs.logback.classic)
 
   // Jackson
-  implementation(libs.jackson.module.kotlin)
-  implementation(libs.jackson.datatype.jsr310)
+  implementation(libs.jackson3.kotlin)
 
   // Coroutines
   implementation(libs.kotlinx.coroutines.core)

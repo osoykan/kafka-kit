@@ -1,10 +1,9 @@
 package io.github.osoykan.springkafka.example.consumers
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.github.osoykan.kafka.toolkit.dumpThreadInfo
 import io.github.osoykan.springkafka.example.domain.*
-import io.github.osoykan.springkafka.example.infra.EventMetricsService
-import io.github.osoykan.springkafka.example.infra.EventValidator
-import io.github.osoykan.springkafka.example.infra.ValidationResult
+import io.github.osoykan.springkafka.example.infra.*
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
@@ -46,8 +45,9 @@ class OrderCreatedConsumer(
    * - Properly propagates exceptions
    */
   @KafkaListener(topics = ["example.orders.created"])
-  suspend fun consume(record: ConsumerRecord<String, DomainEvent>) {
-    val event = record.value() as OrderCreatedEvent
+  suspend fun consume(record: ConsumerRecord<String, OrderCreatedEvent>) {
+    dumpThreadInfo(javaClass.name)
+    val event = record.value()
 
     logger.info {
       "Processing order: ${event.orderId} for customer ${event.customerId}, amount: ${event.amount} ${event.currency}"

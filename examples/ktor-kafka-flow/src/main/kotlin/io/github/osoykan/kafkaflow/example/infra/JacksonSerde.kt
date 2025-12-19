@@ -1,21 +1,22 @@
 package io.github.osoykan.kafkaflow.example.infra
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.SerializationFeature
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.github.osoykan.kafkaflow.example.domain.DomainEvent
-import org.apache.kafka.common.serialization.Deserializer
-import org.apache.kafka.common.serialization.Serializer
+import org.apache.kafka.common.serialization.*
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.databind.cfg.DateTimeFeature
+import tools.jackson.module.kotlin.*
 
 /**
  * Configured Jackson ObjectMapper for the example application.
  */
-val objectMapper: ObjectMapper = jacksonObjectMapper().apply {
-  registerModule(JavaTimeModule())
-  disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+val objectMapper = jsonMapper {
+  addModule(kotlinModule())
+  findAndAddModules()
   disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+  disable(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)
+  disable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+  disable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+  enable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
 }
 
 /**

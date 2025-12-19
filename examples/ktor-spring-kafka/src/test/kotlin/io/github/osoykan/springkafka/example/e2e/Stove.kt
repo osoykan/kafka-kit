@@ -6,12 +6,15 @@ import com.trendyol.stove.testing.e2e.http.*
 import com.trendyol.stove.testing.e2e.serialization.StoveSerde
 import com.trendyol.stove.testing.e2e.standalone.kafka.*
 import com.trendyol.stove.testing.e2e.system.*
-import io.github.osoykan.springkafka.example.infra.objectMapper
 import io.github.osoykan.springkafka.example.run
 import io.kotest.core.config.AbstractProjectConfig
 import org.apache.kafka.clients.admin.NewTopic
 import org.koin.core.module.Module
 import org.koin.dsl.module
+import org.springframework.kafka.support.serializer.JacksonJsonSerializer
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.databind.cfg.DateTimeFeature
+import tools.jackson.module.kotlin.*
 
 /**
  * Custom StoveSerde that aligns with the app's Jackson serialization.
@@ -24,29 +27,24 @@ import org.koin.dsl.module
  * if the result matches the requested type.
  */
 class AppAlignedSerde : StoveSerde<Any, ByteArray> {
+  private val serde = jsonMapper {
+    addModule(kotlinModule())
+    findAndAddModules()
+    disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+    disable(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)
+    disable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+    disable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+    enable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+  }
+
   override fun serialize(value: Any): ByteArray = when (value) {
     is String -> value.toByteArray()
-    else -> objectMapper.writeValueAsBytes(value)
+    else -> serde.writeValueAsBytes(value)
   }
 
-  @Suppress("UNCHECKED_CAST")
-  override fun <T : Any> deserialize(value: ByteArray, clazz: Class<T>): T {
-    // First try to read with polymorphic type info (uses @class discriminator)
-    val result = runCatching {
-      objectMapper.readValue(value, Any::class.java)
-    }.getOrElse {
-      // Fallback: try direct deserialization to requested class
-      objectMapper.readValue(value, clazz)
-    }
-
-    // If the result is assignable to the requested type, cast it
-    return if (clazz.isInstance(result)) {
-      result as T
-    } else {
-      // If types don't match, try direct deserialization
-      objectMapper.readValue(value, clazz)
-    }
-  }
+  override fun <T : Any> deserialize(value: ByteArray, clazz: Class<T>): T = runCatching {
+    serde.readValue(value, clazz) as T
+  }.getOrElse { error("Unable to deserialize value $value of ${clazz.simpleName}") }
 }
 
 /**
@@ -102,10 +100,11 @@ class Stove : AbstractProjectConfig() {
       kafka {
         KafkaSystemOptions(
           serde = AppAlignedSerde(),
+          valueSerializer = JacksonJsonSerializer(),
           useEmbeddedKafka = true,
           listenPublishedMessagesFromStove = true,
           topicSuffixes = TopicSuffixes(
-            error = listOf(".dlt"),
+            error = listOf(".dlt", ".DLT"),
             retry = listOf(".retry")
           ),
           configureExposedConfiguration = { cfg ->

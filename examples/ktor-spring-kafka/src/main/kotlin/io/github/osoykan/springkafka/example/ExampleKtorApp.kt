@@ -1,20 +1,12 @@
 package io.github.osoykan.springkafka.example
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.SerializationFeature
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.sksamuel.hoplite.ConfigLoaderBuilder
-import com.sksamuel.hoplite.ExperimentalHoplite
-import com.sksamuel.hoplite.addCommandLineSource
-import com.sksamuel.hoplite.addResourceSource
+import com.fasterxml.jackson.databind.*
+import com.sksamuel.hoplite.*
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.ktorkafka.SpringKafka
 import io.github.osoykan.springkafka.example.api.configureRouting
 import io.github.osoykan.springkafka.example.config.AppConfig
-import io.github.osoykan.springkafka.example.domain.NotificationService
-import io.github.osoykan.springkafka.example.domain.OrderRepository
-import io.github.osoykan.springkafka.example.infra.JacksonDeserializer
-import io.github.osoykan.springkafka.example.infra.JacksonSerializer
+import io.github.osoykan.springkafka.example.domain.*
 import io.github.osoykan.springkafka.example.infra.KoinDependencyResolver
 import io.ktor.http.*
 import io.ktor.serialization.jackson.*
@@ -29,6 +21,7 @@ import org.koin.core.module.Module
 import org.koin.dsl.module
 import org.koin.ktor.ext.getKoin
 import org.koin.ktor.plugin.Koin
+import org.springframework.kafka.support.serializer.*
 
 private val logger = KotlinLogging.logger {}
 
@@ -107,8 +100,8 @@ fun Application.appModule(
     dependencyResolver = KoinDependencyResolver(getKoin())
 
     // Custom serializers/deserializers for domain events
-    valueSerializer = JacksonSerializer::class
-    valueDeserializer = JacksonDeserializer::class
+    valueSerializer = JacksonJsonSerializer::class
+    valueDeserializer = ErrorHandlingDeserializer::class
 
     // Auto-discover consumers and Spring services
     scanPackages(
@@ -119,6 +112,11 @@ fun Application.appModule(
     consumer {
       concurrency = config.kafka.consumer.concurrency
       pollTimeout = config.kafka.consumer.pollTimeout
+      consumerProperty(JacksonJsonDeserializer.TRUSTED_PACKAGES, "*")
+      consumerProperty(
+        ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS,
+        JacksonJsonDeserializer::class.qualifiedName!!
+      )
     }
 
     producer {
@@ -138,7 +136,7 @@ fun Application.appModule(
   install(AutoHeadResponse)
   install(ContentNegotiation) {
     jackson {
-      registerModule(JavaTimeModule())
+      findAndRegisterModules()
       disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
       disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     }

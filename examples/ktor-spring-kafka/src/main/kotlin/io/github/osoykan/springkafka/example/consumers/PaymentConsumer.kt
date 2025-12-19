@@ -1,6 +1,7 @@
 package io.github.osoykan.springkafka.example.consumers
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.github.osoykan.kafka.toolkit.dumpThreadInfo
 import io.github.osoykan.springkafka.example.domain.*
 import kotlinx.coroutines.delay
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -31,8 +32,9 @@ class PaymentConsumer(
    * Spring Kafka will acknowledge the message only after successful processing.
    */
   @KafkaListener(topics = ["example.payments"])
-  suspend fun consume(record: ConsumerRecord<String, DomainEvent>) {
-    val event = record.value() as PaymentEvent
+  suspend fun consume(record: ConsumerRecord<String, PaymentEvent>) {
+    dumpThreadInfo(javaClass.name)
+    val event = record.value()
 
     logger.info {
       "Processing payment: ${event.paymentId} for order ${event.orderId}, amount: ${event.amount} ${event.currency}"

@@ -1,6 +1,7 @@
 package io.github.osoykan.springkafka.example.consumers
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.github.osoykan.kafka.toolkit.dumpThreadInfo
 import io.github.osoykan.springkafka.example.domain.*
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.kafka.annotation.KafkaListener
@@ -24,8 +25,9 @@ class NotificationConsumer {
    * This suspend function can call external notification services asynchronously.
    */
   @KafkaListener(topics = ["example.notifications"])
-  suspend fun consume(record: ConsumerRecord<String, DomainEvent>) {
-    val event = record.value() as NotificationEvent
+  suspend fun consume(record: ConsumerRecord<String, NotificationEvent>) {
+    dumpThreadInfo(javaClass.name)
+    val event = record.value()
 
     logger.info {
       "Sending ${event.type} notification to user ${event.userId}: ${event.title}"
