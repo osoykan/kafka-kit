@@ -70,6 +70,10 @@ class SpringKafkaPoller<K : Any, V : Any>(
 
   /**
    * Polls Kafka with ordered commits using [OrderedCommitter].
+   *
+   * Backpressure is tracked based on in-flight records:
+   * - onBufferAdd() when record enters processing pipeline
+   * - onBufferConsume() when record is acknowledged (processing complete)
    */
   private fun pollWithOrderedCommits(
     topic: TopicConfig,
@@ -93,8 +97,6 @@ class SpringKafkaPoller<K : Any, V : Any>(
         shutdownContainer(topic, containerContext, committerJob, committerContext)
       }
     }.buffer(bufferCapacity)
-      .onEach { containerContext -> }
-      .let { flow -> applyBackpressure(flow, topic, bufferCapacity) }
       .flowOn(dispatcher)
   }
 
@@ -146,7 +148,8 @@ class SpringKafkaPoller<K : Any, V : Any>(
         }
       }
     },
-    onRecordEmitted = { backpressure.onBufferAdd() }
+    onRecordEmitted = { backpressure.onBufferAdd() },
+    onRecordAcknowledged = { backpressure.onBufferConsume() }
   )
 
   private fun createContainerProperties(topic: TopicConfig): ContainerProperties =
@@ -185,7 +188,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
   ) {
     suspend fun process() = committer.processChannel(channel)
 
-    fun flush() {
+    suspend fun flush() {
       channel.close()
       committer.flush()
     }
@@ -215,10 +218,12 @@ class SpringKafkaPoller<K : Any, V : Any>(
   }
 
   private fun flushAndCloseCommitters() {
-    committers.forEach { (topic, context) ->
-      runCatching { context.flush() }
-        .onSuccess { logger.info { "SpringKafkaPoller: Flushed ordered committer for [$topic]" } }
-        .onFailure { e -> logger.error(e) { "Error flushing committer for [$topic]" } }
+    runBlocking {
+      committers.forEach { (topic, context) ->
+        runCatching { context.flush() }
+          .onSuccess { logger.info { "SpringKafkaPoller: Flushed ordered committer for [$topic]" } }
+          .onFailure { e -> logger.error(e) { "Error flushing committer for [$topic]" } }
+      }
     }
     committers.clear()
   }
@@ -235,30 +240,13 @@ class SpringKafkaPoller<K : Any, V : Any>(
     containers.remove(topic.displayName)
 
     committerContext.channel.close()
-    runBlocking { committerJob.join() }
-    committerContext.committer.flush()
+    runBlocking {
+      committerJob.join()
+      committerContext.committer.flush()
+    }
     committers.remove(topic.displayName)
 
     logger.info { "SpringKafkaPoller: Ordered committer stopped for [${topic.displayName}]" }
-  }
-
-  private fun <K : Any, V : Any> applyBackpressure(
-    flow: Flow<AckableRecord<K, V>>,
-    topic: TopicConfig,
-    bufferCapacity: Int
-  ): Flow<AckableRecord<K, V>> {
-    // Create a shared backpressure tracker for onEach consumption
-    val containerRef = containers[topic.displayName]
-    if (containerRef == null) return flow
-
-    val backpressure = BackpressureController(
-      containerProvider = { containerRef },
-      config = listenerConfig.backpressure,
-      bufferCapacity = bufferCapacity,
-      topicName = topic.displayName
-    )
-
-    return flow.onEach { backpressure.onBufferConsume() }
   }
 
   // endregion

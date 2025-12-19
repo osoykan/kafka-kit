@@ -4,7 +4,6 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.CompletionEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.trySendBlocking
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.springframework.kafka.listener.AcknowledgingMessageListener
 import org.springframework.kafka.support.Acknowledgment
@@ -22,6 +21,11 @@ internal typealias OnRecordEmitted = () -> Unit
 internal typealias OnRecordEmitFailed = (Exception) -> Unit
 
 /**
+ * Callback invoked when a record is acknowledged (processing completed).
+ */
+internal typealias OnRecordAcknowledged = () -> Unit
+
+/**
  * Factory for creating Spring Kafka [AcknowledgingMessageListener] instances
  * that integrate with the ordered commit system.
  *
@@ -36,17 +40,19 @@ internal object AcknowledgingListenerFactory {
    *
    * @param commitChannel Channel for sending completion events to the ordered committer
    * @param sendToFlow Function to send the ackable record to the flow
-   * @param onRecordEmitted Called after a record is successfully sent to the flow
+   * @param onRecordEmitted Called after a record is successfully sent to the flow (buffer add)
+   * @param onRecordAcknowledged Called when acknowledge() is invoked (processing complete)
    * @param onRecordEmitFailed Called when sending to the flow fails
    */
   fun <K : Any, V : Any> create(
     commitChannel: Channel<CompletionEvent>,
     sendToFlow: (AckableRecord<K, V>) -> Result<Unit>,
     onRecordEmitted: OnRecordEmitted = {},
+    onRecordAcknowledged: OnRecordAcknowledged = {},
     onRecordEmitFailed: OnRecordEmitFailed = {}
   ): AcknowledgingMessageListener<K, V> = AcknowledgingMessageListener { record, ack ->
     if (ack != null) {
-      val ackableRecord = createAckableRecord(record, ack, commitChannel)
+      val ackableRecord = createAckableRecord(record, ack, commitChannel, onRecordAcknowledged)
       sendToFlow(ackableRecord)
         .onSuccess { onRecordEmitted() }
         .onFailure { exception ->
@@ -64,10 +70,14 @@ internal object AcknowledgingListenerFactory {
   private fun <K, V> createAckableRecord(
     record: ConsumerRecord<K, V>,
     ack: Acknowledgment,
-    commitChannel: Channel<CompletionEvent>
+    commitChannel: Channel<CompletionEvent>,
+    onRecordAcknowledged: OnRecordAcknowledged
   ): AckableRecord<K, V> = AckableRecord(
     record = record,
     acknowledge = {
+      // Signal processing complete for backpressure
+      onRecordAcknowledged()
+
       val event = CompletionEvent(
         partition = record.partition(),
         offset = record.offset(),

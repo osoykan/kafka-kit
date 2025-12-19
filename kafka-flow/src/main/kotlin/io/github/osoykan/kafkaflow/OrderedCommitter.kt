@@ -7,8 +7,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.whileSelect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.TreeSet
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
@@ -29,6 +30,9 @@ data class CompletionEvent(
 /**
  * Tracks uncommitted offsets for a batch commit.
  *
+ * Uses [Mutex] for coroutine-friendly synchronization instead of @Synchronized.
+ * This suspends instead of blocking threads.
+ *
  * For each partition, we track:
  * - Completed offsets (may arrive out of order)
  * - Last committed offset
@@ -43,19 +47,19 @@ internal class CommitBatch {
     val pendingAcks: MutableMap<Long, () -> Unit> = mutableMapOf()
   )
 
-  private val partitions = ConcurrentHashMap<Int, PartitionState>()
+  private val partitions = mutableMapOf<Int, PartitionState>()
   private val count = AtomicInteger(0)
+  private val mutex = Mutex()
 
   /**
    * Records a completion event.
    * @return current count of uncommitted records
    */
-  @Synchronized
-  fun addCompletion(event: CompletionEvent): Int {
+  suspend fun addCompletion(event: CompletionEvent): Int = mutex.withLock {
     val state = partitions.getOrPut(event.partition) { PartitionState() }
     state.completed.add(event.offset)
     state.pendingAcks[event.offset] = event.acknowledge
-    return count.incrementAndGet()
+    count.incrementAndGet()
   }
 
   /**
@@ -69,8 +73,7 @@ internal class CommitBatch {
    *
    * @return Map of partition to highest committed offset, or null if nothing was committed
    */
-  @Synchronized
-  fun commitContiguous(): Map<Int, Long>? {
+  suspend fun commitContiguous(): Map<Int, Long>? = mutex.withLock {
     val committed = mutableMapOf<Int, Long>()
 
     partitions.forEach { (partition, state) ->
@@ -97,7 +100,7 @@ internal class CommitBatch {
       }
     }
 
-    return committed.ifEmpty { null }
+    committed.ifEmpty { null }
   }
 
   /**
@@ -119,8 +122,7 @@ internal class CommitBatch {
    * Force commits the highest pending offset per partition (even with gaps).
    * Use during shutdown to prevent stuck records.
    */
-  @Synchronized
-  fun flush(): Map<Int, Long>? {
+  suspend fun flush(): Map<Int, Long>? = mutex.withLock {
     val flushed = mutableMapOf<Int, Long>()
 
     partitions.forEach { (partition, state) ->
@@ -138,25 +140,26 @@ internal class CommitBatch {
     }
 
     count.set(0)
-    return flushed.ifEmpty { null }
+    flushed.ifEmpty { null }
   }
 
   /**
    * Gets stats for all partitions.
    */
-  fun getStats(): Map<Int, CommitterStats> = partitions.mapValues { (_, state) ->
-    CommitterStats(
-      lastCommitted = state.lastCommitted,
-      pendingCount = state.completed.size,
-      pendingOffsets = state.completed.toList()
-    )
+  suspend fun getStats(): Map<Int, CommitterStats> = mutex.withLock {
+    partitions.mapValues { (_, state) ->
+      CommitterStats(
+        lastCommitted = state.lastCommitted,
+        pendingCount = state.completed.size,
+        pendingOffsets = state.completed.toList()
+      )
+    }
   }
 
   /**
    * Resets state for a specific partition.
    */
-  @Synchronized
-  fun resetPartition(partition: Int) {
+  suspend fun resetPartition(partition: Int): Unit = mutex.withLock {
     partitions.remove(partition)?.let { state ->
       count.addAndGet(-state.pendingAcks.size)
     }
@@ -165,8 +168,7 @@ internal class CommitBatch {
   /**
    * Resets all state.
    */
-  @Synchronized
-  fun reset() {
+  suspend fun reset(): Unit = mutex.withLock {
     partitions.clear()
     count.set(0)
   }
@@ -213,7 +215,7 @@ class OrderedCommitter(
    * @param event The completion event with partition, offset, and ack callback
    * @return The committed offsets map, or null if no commit was made
    */
-  fun onComplete(event: CompletionEvent): Map<Int, Long>? {
+  suspend fun onComplete(event: CompletionEvent): Map<Int, Long>? {
     val count = batch.addCompletion(event)
 
     return when (commitStrategy) {
@@ -244,7 +246,7 @@ class OrderedCommitter(
   /**
    * Performs the commit operation.
    */
-  private fun doCommit(): Map<Int, Long>? {
+  private suspend fun doCommit(): Map<Int, Long>? {
     val committed = batch.commitContiguous()
     committed?.forEach { (partition, offset) -> onCommit(partition, offset) }
     return committed
@@ -327,7 +329,7 @@ class OrderedCommitter(
    * Forces commit of all pending completions (highest contiguous per partition).
    * Use this during shutdown.
    */
-  fun flush() {
+  suspend fun flush() {
     val flushed = batch.flush()
     flushed?.forEach { (partition, offset) -> onCommit(partition, offset) }
     stop()
@@ -336,12 +338,12 @@ class OrderedCommitter(
   /**
    * Returns statistics about the committer state.
    */
-  fun getStats(): Map<Int, CommitterStats> = batch.getStats()
+  suspend fun getStats(): Map<Int, CommitterStats> = batch.getStats()
 
   /**
    * Resets state for a partition. Use when partition is revoked.
    */
-  fun resetPartition(partition: Int) {
+  suspend fun resetPartition(partition: Int) {
     batch.resetPartition(partition)
     logger.debug { "Reset state for partition $partition" }
   }
@@ -349,7 +351,7 @@ class OrderedCommitter(
   /**
    * Resets all state. Use during shutdown or testing.
    */
-  fun reset() {
+  suspend fun reset() {
     batch.reset()
     stop()
     logger.debug { "Reset all committer state" }
