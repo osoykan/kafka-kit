@@ -74,12 +74,17 @@ class SpringKafkaPoller<K : Any, V : Any>(
    * Backpressure is tracked based on in-flight records:
    * - onBufferAdd() when record enters processing pipeline
    * - onBufferConsume() when record is acknowledged (processing complete)
+   *
+   * Gap detection pauses consumption when records complete out of order,
+   * preventing unbounded memory growth from pending completions.
    */
   private fun pollWithOrderedCommits(
     topic: TopicConfig,
     bufferCapacity: Int
   ): Flow<AckableRecord<K, V>> {
-    val committerContext = createCommitterContext(topic)
+    // Create container reference early so committer can pause/resume on gap detection
+    val containerRef = ContainerRef<K, V>()
+    val committerContext = createCommitterContext(topic, containerRef)
     committers[topic.displayName] = committerContext
 
     return callbackFlow {
@@ -89,7 +94,7 @@ class SpringKafkaPoller<K : Any, V : Any>(
       }
 
       val committerJob = launch { committerContext.process() }
-      val containerContext = createAndStartContainer(topic, bufferCapacity, committerContext.channel)
+      val containerContext = createAndStartContainer(topic, bufferCapacity, committerContext.channel, containerRef)
 
       logStartup(topic, containerContext.container)
 
@@ -110,10 +115,9 @@ class SpringKafkaPoller<K : Any, V : Any>(
   private fun ProducerScope<AckableRecord<K, V>>.createAndStartContainer(
     topic: TopicConfig,
     bufferCapacity: Int,
-    commitChannel: Channel<CompletionEvent>
+    commitChannel: Channel<CompletionEvent>,
+    containerRef: ContainerRef<K, V>
   ): ContainerContext<K, V> {
-    val containerRef = ContainerRef<K, V>()
-
     val backpressure = BackpressureController(
       containerProvider = { containerRef.get() },
       config = listenerConfig.backpressure,
@@ -194,12 +198,22 @@ class SpringKafkaPoller<K : Any, V : Any>(
     }
   }
 
-  private fun createCommitterContext(topic: TopicConfig): CommitterContext {
+  private fun createCommitterContext(topic: TopicConfig, containerRef: ContainerRef<K, V>): CommitterContext {
     val effectiveCommitStrategy = topic.effectiveCommitStrategy(listenerConfig.commitStrategy)
     val orderedCommitter = OrderedCommitter(
       commitStrategy = effectiveCommitStrategy,
       onCommit = { partition, offset ->
         logger.debug { "OrderedCommitter[$effectiveCommitStrategy]: Committed partition $partition up to offset $offset" }
+      },
+      onGapDetected = {
+        logger.info { "OrderedCommitter[${topic.displayName}]: Gap detected, pausing container" }
+        runCatching { containerRef.get().pause() }
+          .onFailure { e -> logger.warn(e) { "Failed to pause container on gap detection" } }
+      },
+      onGapClosed = {
+        logger.info { "OrderedCommitter[${topic.displayName}]: Gap closed, resuming container" }
+        runCatching { containerRef.get().resume() }
+          .onFailure { e -> logger.warn(e) { "Failed to resume container on gap closure" } }
       }
     )
     return CommitterContext(orderedCommitter, createCommitChannel())
@@ -267,8 +281,9 @@ class SpringKafkaPoller<K : Any, V : Any>(
 
 /**
  * Thread-safe holder for late-initialized container reference.
+ * Used to allow gap detection callbacks to pause/resume the container.
  */
-private class ContainerRef<K : Any, V : Any> {
+internal class ContainerRef<K : Any, V : Any> {
   @Volatile
   private lateinit var container: ConcurrentMessageListenerContainer<K, V>
 

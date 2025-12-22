@@ -31,10 +31,11 @@ data class CompletionEvent(
  * Result of a commit operation.
  *
  * @property commits Map of partition to highest committed offset (empty if nothing committed)
+ * @property hasRemainingGaps True if there are still gaps after committing (some partitions have pending completions that can't be committed)
  */
-@JvmInline
-value class CommitResult(
-  val commits: Map<Int, Long>
+data class CommitResult(
+  val commits: Map<Int, Long>,
+  val hasRemainingGaps: Boolean = false
 ) {
   val isEmpty: Boolean get() = commits.isEmpty()
   val isNotEmpty: Boolean get() = commits.isNotEmpty()
@@ -44,9 +45,22 @@ value class CommitResult(
   }
 
   companion object {
-    val Empty = CommitResult(emptyMap())
+    val Empty = CommitResult(emptyMap(), false)
   }
 }
+
+/**
+ * Result of adding a completion event.
+ *
+ * @property count Current count of uncommitted records
+ * @property hasGap True if there's a gap (completed offsets exist but next expected offset not completed)
+ * @property partition The partition this completion belongs to
+ */
+data class CompletionAddResult(
+  val count: Int,
+  val hasGap: Boolean,
+  val partition: Int
+)
 
 /**
  * Tracks uncommitted offsets for a batch commit.
@@ -74,13 +88,37 @@ internal class CommitBatch {
 
   /**
    * Records a completion event.
-   * @return current count of uncommitted records
+   * @return CompletionAddResult with count, gap status, and partition
    */
-  suspend fun addCompletion(event: CompletionEvent): Int = mutex.withLock {
+  suspend fun addCompletion(event: CompletionEvent): CompletionAddResult = mutex.withLock {
     val state = partitions.getOrPut(event.partition) { PartitionState() }
     state.completed.add(event.offset)
     state.pendingAcks[event.offset] = event.acknowledge
-    count.incrementAndGet()
+    val currentCount = count.incrementAndGet()
+
+    CompletionAddResult(
+      count = currentCount,
+      hasGap = hasGapForPartition(state),
+      partition = event.partition
+    )
+  }
+
+  /**
+   * Checks if any partition has a gap.
+   * A gap exists when completed offsets exist but the next expected offset (lastCommitted + 1)
+   * hasn't completed yet.
+   */
+  suspend fun hasAnyGap(): Boolean = mutex.withLock {
+    partitions.values.any { hasGapForPartition(it) }
+  }
+
+  /**
+   * Checks if a specific partition has a gap.
+   */
+  private fun hasGapForPartition(state: PartitionState): Boolean {
+    if (state.completed.isEmpty()) return false
+    val nextExpected = state.lastCommitted + 1
+    return !state.completed.contains(nextExpected)
   }
 
   /**
@@ -92,7 +130,7 @@ internal class CommitBatch {
    * Commits all contiguous offsets for all partitions.
    * Only acknowledges the highest contiguous offset per partition (Kafka semantics).
    *
-   * @return CommitResult with map of partition to highest committed offset
+   * @return CommitResult with map of partition to highest committed offset and remaining gap status
    */
   suspend fun commitContiguous(): CommitResult = mutex.withLock {
     val committed = mutableMapOf<Int, Long>()
@@ -121,7 +159,10 @@ internal class CommitBatch {
       }
     }
 
-    CommitResult(committed)
+    // Check if there are remaining gaps after committing
+    val hasRemainingGaps = partitions.values.any { hasGapForPartition(it) }
+
+    CommitResult(committed, hasRemainingGaps)
   }
 
   /**
@@ -160,7 +201,7 @@ internal class CommitBatch {
     }
 
     count.set(0)
-    CommitResult(flushed)
+    CommitResult(flushed, hasRemainingGaps = false)
   }
 
   /**
@@ -205,6 +246,12 @@ internal class CommitBatch {
  * Track completed offsets per partition and only commit when offsets are contiguous.
  * Uses [CommitStrategy] to batch commits for efficiency.
  *
+ * ## Gap Detection
+ *
+ * A gap occurs when records complete out of order - e.g., record 2 completes before record 0.
+ * When a gap is detected, [onGapDetected] is called. The consumer should pause until the gap
+ * is closed. When the gap closes (all prior offsets complete), [onGapClosed] is called.
+ *
  * ## Commit Strategies
  *
  * - **BySize(1)**: Commit immediately when contiguous offsets are found (per-record, safest)
@@ -217,30 +264,47 @@ internal class CommitBatch {
  *
  * @param commitStrategy Strategy for batching commits (default: BySize(100) for throughput)
  * @param onCommit Optional callback invoked after each commit with partition and offset
+ * @param onGapDetected Callback invoked when a gap is detected (should pause consumption)
+ * @param onGapClosed Callback invoked when gaps are closed (should resume consumption)
  */
 class OrderedCommitter(
   private val commitStrategy: CommitStrategy = CommitStrategy.BySize(100),
-  private val onCommit: (partition: Int, offset: Long) -> Unit = { _, _ -> }
+  private val onCommit: (partition: Int, offset: Long) -> Unit = { _, _ -> },
+  private val onGapDetected: () -> Unit = {},
+  private val onGapClosed: () -> Unit = {}
 ) {
   private val batch = CommitBatch()
   private val batchSignal = Channel<Unit>(Channel.RENDEZVOUS)
   private var commitManagerJob: Job? = null
   private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+  @Volatile
+  private var gapActive = false
+
   /**
    * Called when a record processing completes.
    * For BySize(1), commits immediately if contiguous.
    * For other strategies, signals the commit manager.
    *
+   * When a gap is detected, [onGapDetected] is called to pause consumption.
+   * When the gap closes, [onGapClosed] is called to resume.
+   *
    * @param event The completion event with partition, offset, and ack callback
    * @return The committed offsets (empty if no commit was made)
    */
   suspend fun onComplete(event: CompletionEvent): CommitResult {
-    val count = batch.addCompletion(event)
+    val addResult = batch.addCompletion(event)
+
+    // Handle gap detection
+    if (addResult.hasGap && !gapActive) {
+      gapActive = true
+      logger.debug { "Gap detected in partition ${addResult.partition}, pausing consumption" }
+      onGapDetected()
+    }
 
     return when (commitStrategy) {
       is CommitStrategy.BySize -> {
-        if (count >= commitStrategy.size) {
+        if (addResult.count >= commitStrategy.size) {
           doCommit()
         } else {
           CommitResult.Empty
@@ -253,7 +317,7 @@ class OrderedCommitter(
       }
 
       is CommitStrategy.BySizeOrTime -> {
-        if (count >= commitStrategy.size) {
+        if (addResult.count >= commitStrategy.size) {
           // Signal commit manager that batch size reached
           batchSignal.trySend(Unit)
         }
@@ -265,10 +329,19 @@ class OrderedCommitter(
 
   /**
    * Performs the commit operation.
+   * If gaps close after committing, calls [onGapClosed] to resume consumption.
    */
   private suspend fun doCommit(): CommitResult {
     val result = batch.commitContiguous()
     result.forEach { partition, offset -> onCommit(partition, offset) }
+
+    // Handle gap closure
+    if (gapActive && !result.hasRemainingGaps) {
+      gapActive = false
+      logger.debug { "Gap closed, resuming consumption" }
+      onGapClosed()
+    }
+
     return result
   }
 

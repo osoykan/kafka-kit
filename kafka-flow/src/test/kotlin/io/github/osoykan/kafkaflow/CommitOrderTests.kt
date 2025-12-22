@@ -535,6 +535,113 @@ class CommitOrderTests :
       ackCalls shouldContainExactly listOf(0L)
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Gap Detection Tests
+    // ─────────────────────────────────────────────────────────────
+
+    test("onGapDetected is called when out-of-order completion creates a gap") {
+      var gapDetected = false
+      var gapClosed = false
+
+      val committer = OrderedCommitter(
+        commitStrategy = CommitStrategy.BySize(1),
+        onGapDetected = { gapDetected = true },
+        onGapClosed = { gapClosed = true }
+      )
+
+      // Complete offset 2 first (creates gap - offsets 0 and 1 are missing)
+      committer.onComplete(CompletionEvent(0, 2L) {})
+
+      gapDetected shouldBe true
+      gapClosed shouldBe false
+    }
+
+    test("onGapClosed is called when gap-closing offset completes") {
+      var gapDetected = false
+      var gapClosed = false
+
+      val committer = OrderedCommitter(
+        commitStrategy = CommitStrategy.BySize(1),
+        onGapDetected = { gapDetected = true },
+        onGapClosed = { gapClosed = true }
+      )
+
+      // Create gap: complete offset 2 first
+      committer.onComplete(CompletionEvent(0, 2L) {})
+      gapDetected shouldBe true
+      gapClosed shouldBe false
+
+      // Complete offset 1 - still a gap (offset 0 missing)
+      committer.onComplete(CompletionEvent(0, 1L) {})
+      gapClosed shouldBe false
+
+      // Complete offset 0 - gap closed, commits 0, 1, 2
+      committer.onComplete(CompletionEvent(0, 0L) {})
+      gapClosed shouldBe true
+    }
+
+    test("no gap detected when completions arrive in order") {
+      var gapDetected = false
+      var gapClosed = false
+
+      val committer = OrderedCommitter(
+        commitStrategy = CommitStrategy.BySize(1),
+        onGapDetected = { gapDetected = true },
+        onGapClosed = { gapClosed = true }
+      )
+
+      // Complete in order: 0, 1, 2
+      committer.onComplete(CompletionEvent(0, 0L) {})
+      committer.onComplete(CompletionEvent(0, 1L) {})
+      committer.onComplete(CompletionEvent(0, 2L) {})
+
+      gapDetected shouldBe false
+      gapClosed shouldBe false // Never had a gap
+    }
+
+    test("gap detection works independently per partition") {
+      val gapPartitions = CopyOnWriteArrayList<Int>()
+      var closedCount = 0
+
+      val committer = OrderedCommitter(
+        commitStrategy = CommitStrategy.BySize(1),
+        onGapDetected = { /* Gaps are detected per-completion, tracked internally */ },
+        onGapClosed = { closedCount++ }
+      )
+
+      // Partition 0: create gap (offset 2 before 0, 1)
+      committer.onComplete(CompletionEvent(0, 2L) {})
+
+      // Partition 1: in order (no gap)
+      committer.onComplete(CompletionEvent(1, 0L) {})
+      committer.onComplete(CompletionEvent(1, 1L) {})
+
+      // Partition 0: close gap
+      committer.onComplete(CompletionEvent(0, 0L) {})
+      committer.onComplete(CompletionEvent(0, 1L) {})
+
+      closedCount shouldBe 1 // Gap closed once for partition 0
+    }
+
+    test("CommitResult includes hasRemainingGaps status") {
+      val committer = OrderedCommitter(commitStrategy = CommitStrategy.BySize(1))
+
+      // Create gap: complete offset 3 first
+      val result1 = committer.onComplete(CompletionEvent(0, 3L) {})
+      result1.isEmpty shouldBe true // Can't commit
+
+      // Complete offset 0 - can commit but gap remains (1, 2 missing)
+      val result2 = committer.onComplete(CompletionEvent(0, 0L) {})
+      result2.commits[0] shouldBe 0L
+      result2.hasRemainingGaps shouldBe true // Still have pending 3
+
+      // Complete 1, 2 - now gap is fully closed
+      committer.onComplete(CompletionEvent(0, 1L) {})
+      val result3 = committer.onComplete(CompletionEvent(0, 2L) {})
+      result3.commits[0] shouldBe 3L
+      result3.hasRemainingGaps shouldBe false
+    }
+
     test("Concurrent completions are thread-safe") {
       val committer = OrderedCommitter(commitStrategy = CommitStrategy.BySize(1000)) // Large batch to prevent auto-commit
       val completionCount = AtomicInteger(0)
