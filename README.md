@@ -139,6 +139,289 @@ class PaymentConsumer : ConsumerAutoAck<String, PaymentEvent> {
 }
 ```
 
+### Concurrency Model
+
+kafka-flow provides two-level parallelism for maximum throughput:
+
+| Parameter | What It Controls | Default |
+|-----------|------------------|---------|
+| `multiplePartitions` | Number of Kafka consumer threads (Spring Kafka's `concurrency`) | 1 |
+| `concurrency` | Number of records processed in parallel per consumer thread | 4 |
+
+**Total parallelism** = `multiplePartitions` × `concurrency`
+
+#### Single Consumer Thread (`multiplePartitions = 1`)
+
+When you have one consumer thread processing all partitions:
+
+```mermaid
+flowchart TB
+    subgraph Topic["📨 Topic: orders.created (3 partitions)"]
+        P0[P0] & P1[P1] & P2[P2]
+    end
+
+    subgraph Container["multiplePartitions = 1"]
+        subgraph C1["Single Consumer Thread"]
+            C1P["Handles all partitions: P0, P1, P2"]
+            subgraph C1Flow["concurrency = 4"]
+                direction LR
+                C1R1["Record 1"] & C1R2["Record 2"] & C1R3["Record 3"] & C1R4["Record 4"]
+            end
+        end
+    end
+
+    P0 & P1 & P2 --> C1
+
+    style Topic fill:#e1f5fe
+    style Container fill:#fff3e0
+    style C1Flow fill:#c8e6c9
+```
+
+> **Result:** 1 thread × 4 concurrent = **4 records in parallel**
+> 
+> ✅ Simple setup, good for low-volume topics  
+> ⚠️ Single thread handles all partitions sequentially (polling), but processes records concurrently
+
+---
+
+#### Multiple Consumer Threads (`multiplePartitions > 1`)
+
+When you scale out with multiple consumer threads:
+
+```mermaid
+flowchart TB
+    subgraph Topic["📨 Topic: orders.created (6 partitions)"]
+        P0[P0] & P1[P1] & P2[P2] & P3[P3] & P4[P4] & P5[P5]
+    end
+
+    subgraph Container["multiplePartitions = 3"]
+        subgraph C1["Consumer Thread 1"]
+            C1P["Partitions: P0, P1"]
+            subgraph C1Flow["concurrency = 4"]
+                direction LR
+                C1R1["R1"] & C1R2["R2"] & C1R3["R3"] & C1R4["R4"]
+            end
+        end
+        
+        subgraph C2["Consumer Thread 2"]
+            C2P["Partitions: P2, P3"]
+            subgraph C2Flow["concurrency = 4"]
+                direction LR
+                C2R1["R1"] & C2R2["R2"] & C2R3["R3"] & C2R4["R4"]
+            end
+        end
+        
+        subgraph C3["Consumer Thread 3"]
+            C3P["Partitions: P4, P5"]
+            subgraph C3Flow["concurrency = 4"]
+                direction LR
+                C3R1["R1"] & C3R2["R2"] & C3R3["R3"] & C3R4["R4"]
+            end
+        end
+    end
+
+    P0 & P1 --> C1
+    P2 & P3 --> C2
+    P4 & P5 --> C3
+
+    style Topic fill:#e1f5fe
+    style Container fill:#fff3e0
+    style C1Flow fill:#c8e6c9
+    style C2Flow fill:#c8e6c9
+    style C3Flow fill:#c8e6c9
+```
+
+> **Result:** 3 threads × 4 concurrent = **12 records in parallel**
+> 
+> ✅ Maximum throughput for high-volume topics  
+> ✅ Each thread polls its assigned partitions independently  
+> ✅ Set `multiplePartitions` ≤ partition count for optimal distribution
+
+**`multiplePartitions`** (Spring Kafka's container concurrency):
+- Creates multiple Kafka consumer instances within the same consumer group
+- Each instance is assigned a subset of partitions
+- Set this to match your partition count for maximum parallelism
+- Uses virtual threads (Java 21+) by default
+
+**`concurrency`** (kafka-flow's processing parallelism):
+- Controls how many records are processed concurrently *within each consumer thread*
+- Implemented via Kotlin Flow's `flatMapMerge(concurrency)`
+- Enables parallel processing of I/O-bound operations (HTTP calls, DB queries)
+- Records from the same partition maintain ordering for commit purposes
+
+**Example configurations:**
+
+```kotlin
+// Low-volume topic, simple processing
+@KafkaTopic(
+    name = "notifications",
+    multiplePartitions = 1,  // Single consumer
+    concurrency = 2          // 2 records at a time
+)
+
+// High-volume topic with I/O-heavy processing
+@KafkaTopic(
+    name = "orders.created",
+    multiplePartitions = 6,  // Match partition count
+    concurrency = 8          // 8 records per consumer = 48 total
+)
+
+// CPU-bound processing (limit parallelism)
+@KafkaTopic(
+    name = "reports.generate",
+    multiplePartitions = 4,
+    concurrency = 1          // Sequential per consumer
+)
+```
+
+**Key differences from Spring Kafka:**
+
+| Spring Kafka | kafka-flow | Description |
+|--------------|------------|-------------|
+| `concurrency` | `multiplePartitions` | Container-level parallelism (Kafka consumer threads) |
+| N/A | `concurrency` | Flow-level parallelism (coroutine-based record processing) |
+
+Spring Kafka processes records sequentially per partition by default. kafka-flow adds a second layer of parallelism via Kotlin Flows, allowing concurrent processing of records while still maintaining commit ordering.
+
+### Partition Assignment & Rebalancing
+
+When using `multiplePartitions > 1`, understanding how Kafka assigns partitions to consumers is important for optimal performance.
+
+#### How ConcurrentMessageListenerContainer Works
+
+Under the hood, kafka-flow uses Spring Kafka's [`ConcurrentMessageListenerContainer`](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/message-listener-container.html#using-ConcurrentMessageListenerContainer), which delegates to multiple `KafkaMessageListenerContainer` instances:
+
+```mermaid
+flowchart LR
+    subgraph Topic["Topic: orders.created"]
+        P0["Partition 0"]
+        P1["Partition 1"]
+        P2["Partition 2"]
+        P3["Partition 3"]
+        P4["Partition 4"]
+        P5["Partition 5"]
+    end
+
+    subgraph CMLC["ConcurrentMessageListenerContainer (multiplePartitions = 3)"]
+        subgraph KC1["KafkaMessageListenerContainer-0"]
+            C1["Consumer Thread 1"]
+            ID1["group.instance.id-1"]
+        end
+        subgraph KC2["KafkaMessageListenerContainer-1"]
+            C2["Consumer Thread 2"]
+            ID2["group.instance.id-2"]
+        end
+        subgraph KC3["KafkaMessageListenerContainer-2"]
+            C3["Consumer Thread 3"]
+            ID3["group.instance.id-3"]
+        end
+    end
+
+    P0 --> C1
+    P1 --> C1
+    P2 --> C2
+    P3 --> C2
+    P4 --> C3
+    P5 --> C3
+
+    style Topic fill:#e1f5fe
+    style CMLC fill:#fff3e0
+    style KC1 fill:#c8e6c9
+    style KC2 fill:#c8e6c9
+    style KC3 fill:#c8e6c9
+```
+
+- Each internal container runs on its own thread with an independent Kafka consumer
+- Partitions are distributed across containers by Kafka's group coordinator
+- Setting `multiplePartitions` > partition count means some containers will be idle
+
+#### Static Membership (Reducing Rebalances)
+
+When `multiplePartitions > 1`, kafka-flow automatically enables **Static Membership** by suffixing `group.instance.id` with `-n` (where n starts at 1). This significantly reduces rebalance events during:
+- Application restarts
+- Rolling deployments
+- Temporary network issues
+
+```yaml
+# application.yaml - Configure static membership
+kafka:
+  consumer:
+    properties:
+      group.instance.id: "order-service"      # Base instance ID
+      session.timeout.ms: 300000              # 5 min (increase for static membership)
+```
+
+**How it works:**
+1. Each container gets a unique instance ID: `order-service-1`, `order-service-2`, etc.
+2. When a consumer restarts with the same instance ID, Kafka recognizes it and skips rebalancing
+3. The increased `session.timeout.ms` gives more time for restarts without triggering rebalance
+
+| Without Static Membership | With Static Membership |
+|--------------------------|------------------------|
+| Every restart triggers rebalance | Same instance ID = no rebalance |
+| Partitions redistributed | Partitions stay assigned |
+| Processing pauses during rebalance | Minimal disruption |
+
+#### Partition Assignment Strategies
+
+kafka-flow uses `CooperativeStickyAssignor` by default, which provides:
+- **Sticky assignments**: Partitions stay with the same consumer across rebalances when possible
+- **Cooperative rebalancing**: Only revoked partitions stop processing during rebalance (not all partitions)
+
+```kotlin
+// Default assignment strategy (configured in ConsumerConfig)
+val partitionAssignmentStrategy = "org.apache.kafka.clients.consumer.CooperativeStickyAssignor"
+```
+
+**Available strategies:**
+
+| Strategy | Behavior | Use Case |
+|----------|----------|----------|
+| `CooperativeStickyAssignor` | Incremental rebalance, sticky assignments | ✅ Recommended default |
+| `RangeAssignor` | Assigns contiguous partition ranges | Co-partitioned topics |
+| `RoundRobinAssignor` | Even distribution across consumers | Simple even load |
+| `StickyAssignor` | Sticky but with stop-the-world rebalance | Legacy compatibility |
+
+#### Kafka 4.0 Consumer Rebalance Protocol (KIP-848)
+
+[Apache Kafka 4.0](https://docs.spring.io/spring-kafka/reference/kafka/receiving-messages/rebalance-listeners.html#new-rebalance-protocol) introduces a new server-driven consumer rebalance protocol that significantly improves rebalancing performance:
+
+```yaml
+# application.yaml - Enable new protocol
+kafka:
+  consumer:
+    properties:
+      group.protocol: consumer  # New protocol (Kafka 4.0+)
+      # group.protocol: classic # Legacy protocol (default)
+```
+
+**Benefits of the new protocol:**
+- **Server-driven assignments**: Broker manages partition assignments, reducing client coordination
+- **Incremental rebalancing**: Only affected partitions are reassigned
+- **Reduced downtime**: Consumer groups experience minimal disruption during scaling
+
+**Important considerations:**
+
+| Aspect | Classic Protocol | New Protocol (KIP-848) |
+|--------|------------------|------------------------|
+| Assignment | Client-side assignors | Server-side (ignores custom assignors) |
+| Rebalancing | Stop-the-world or cooperative | Always incremental |
+| Callbacks | Single `onPartitionsAssigned` | Multiple calls with smaller partition sets |
+| Kafka Version | All versions | 4.0+ only |
+
+```kotlin
+// Example: Configure for Kafka 4.0 new protocol
+fun consumerProperties(config: KafkaConfig): Map<String, Any> = buildMap {
+    put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers)
+    put(ConsumerConfig.GROUP_ID_CONFIG, config.groupId)
+    // Enable new rebalance protocol (Kafka 4.0+)
+    put("group.protocol", "consumer")
+    // Note: partition.assignment.strategy is ignored with new protocol
+}
+```
+
+> ⚠️ **Note:** When using `group.protocol=consumer`, custom partition assignment strategies are ignored. The server handles all assignments. If you need custom assignors, use `group.protocol=classic`.
+
 ### Exception Classification
 
 ```kotlin
