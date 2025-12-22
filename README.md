@@ -1,15 +1,15 @@
-# Kafka Flow
+# Kafka Kit
 
 > ⚠️ **Work in Progress**: This project is under active development. APIs may change.
 
-A Kotlin-first Kafka toolkit with two complementary libraries:
+A Kafka toolkit for Kotlin with two complementary approaches:
 
 | Module | Description |
 |--------|-------------|
 | **[kafka-flow](#kafka-flow-library)** | Flow-based consumer/producer with automatic retry, DLT, and metrics |
 | **[ktor-kafka](#ktor-kafka-plugin)** | Ktor plugin for Spring Kafka with suspend listeners and DI bridging |
 
-Both libraries are built on **Spring Kafka** but require **no Spring Boot**.
+Both modules are built on **Spring Kafka** but require **no Spring Boot**.
 
 ## Requirements
 
