@@ -172,9 +172,9 @@ flowchart TB
 
     P0 & P1 & P2 --> C1
 
-    style Topic fill:#e1f5fe
-    style Container fill:#fff3e0
-    style C1Flow fill:#c8e6c9
+    style Topic fill:#1e88e5,color:#fff
+    style Container fill:#fb8c00,color:#fff
+    style C1Flow fill:#43a047,color:#fff
 ```
 
 > **Result:** 1 thread × 4 concurrent = **4 records in parallel**
@@ -224,11 +224,11 @@ flowchart TB
     P2 & P3 --> C2
     P4 & P5 --> C3
 
-    style Topic fill:#e1f5fe
-    style Container fill:#fff3e0
-    style C1Flow fill:#c8e6c9
-    style C2Flow fill:#c8e6c9
-    style C3Flow fill:#c8e6c9
+    style Topic fill:#1e88e5,color:#fff
+    style Container fill:#fb8c00,color:#fff
+    style C1Flow fill:#43a047,color:#fff
+    style C2Flow fill:#43a047,color:#fff
+    style C3Flow fill:#43a047,color:#fff
 ```
 
 > **Result:** 3 threads × 4 concurrent = **12 records in parallel**
@@ -324,11 +324,11 @@ flowchart LR
     P4 --> C3
     P5 --> C3
 
-    style Topic fill:#e1f5fe
-    style CMLC fill:#fff3e0
-    style KC1 fill:#c8e6c9
-    style KC2 fill:#c8e6c9
-    style KC3 fill:#c8e6c9
+    style Topic fill:#1e88e5,color:#fff
+    style CMLC fill:#fb8c00,color:#fff
+    style KC1 fill:#43a047,color:#fff
+    style KC2 fill:#43a047,color:#fff
+    style KC3 fill:#43a047,color:#fff
 ```
 
 - Each internal container runs on its own thread with an independent Kafka consumer
