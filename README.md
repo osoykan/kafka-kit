@@ -242,6 +242,161 @@ Supported override fields in `TopicConfig`:
 - `maxRetryTopicAttempts`, `retryTopicBackoffMs`, `retryTopicBackoffMultiplier`, `maxRetryTopicBackoffMs`
 - `maxRetryDurationMs`, `maxMessageAgeMs`
 
+### Configuration from File
+
+For production environments, you'll want to externalize consumer configuration to files (YAML, HOCON, etc.) rather than hardcoding in annotations. This enables environment-specific tuning without recompilation.
+
+**1. Define your configuration data classes:**
+
+```kotlin
+data class AppConfig(
+    val kafka: KafkaConfig
+)
+
+data class KafkaConfig(
+    val bootstrapServers: String,
+    val groupId: String,
+    val consumers: Map<String, ConsumerTopicConfig> = emptyMap()
+)
+
+data class ConsumerTopicConfig(
+    val topics: List<String>? = null,
+    val concurrency: Int? = null,
+    val multiplePartitions: Int? = null,
+    val retryTopic: String? = null,
+    val dltTopic: String? = null,
+    val maxInMemoryRetries: Int? = null,
+    val backoffMs: Long? = null,
+    val backoffMultiplier: Double? = null,
+    val maxBackoffMs: Long? = null,
+    val maxRetryTopicAttempts: Int? = null,
+    val retryTopicBackoffMs: Long? = null,
+    val retryTopicBackoffMultiplier: Double? = null,
+    val maxRetryTopicBackoffMs: Long? = null,
+    val maxRetryDurationMs: Long? = null,
+    val maxMessageAgeMs: Long? = null
+)
+```
+
+**2. Create your configuration file (`application.yaml`):**
+
+```yaml
+kafka:
+  bootstrap-servers: "kafka-prod:9092"
+  group-id: "order-service"
+  
+  consumers:
+    # Override settings for OrderCreatedConsumer
+    OrderCreatedConsumer:
+      concurrency: 8                    # Scale up in production
+      max-in-memory-retries: 5
+      max-retry-topic-attempts: 5
+      backoff-ms: 500
+      max-backoff-ms: 60000
+    
+    # Override settings for PaymentConsumer
+    PaymentConsumer:
+      concurrency: 16
+      multiple-partitions: 4           # More partition consumers
+      max-retry-duration-ms: 600000    # 10 min max retry
+      max-message-age-ms: 3600000      # 1 hour max age
+    
+    # Define a consumer entirely from config (no @KafkaTopic needed)
+    AuditLogConsumer:
+      topics:
+        - "audit.events"
+        - "audit.changes"
+      concurrency: 2
+      retry-topic: "audit.retry"
+      dlt-topic: "audit.dlt"
+```
+
+**3. Load configuration using [Hoplite](https://github.com/sksamuel/hoplite):**
+
+```kotlin
+@OptIn(ExperimentalHoplite::class)
+fun loadConfig(args: Array<String> = emptyArray()): AppConfig = ConfigLoaderBuilder
+    .default()
+    .addCommandLineSource(args)  // CLI args override file config
+    .addResourceSource("/application.yaml")
+    .withExplicitSealedTypes()
+    .build()
+    .loadConfigOrThrow<AppConfig>()
+```
+
+**4. Map configuration to TopicConfig and create the factory:**
+
+```kotlin
+fun createKafkaFactory(config: AppConfig): KafkaFlowFactory<String, DomainEvent> {
+    // Convert file config to TopicConfig map
+    val topicConfigs = config.kafka.consumers.mapValues { (_, consumerConfig) ->
+        TopicConfig(
+            topics = consumerConfig.topics ?: emptyList(),
+            concurrency = consumerConfig.concurrency,
+            multiplePartitions = consumerConfig.multiplePartitions,
+            retryTopic = consumerConfig.retryTopic,
+            dltTopic = consumerConfig.dltTopic,
+            maxInMemoryRetries = consumerConfig.maxInMemoryRetries,
+            backoffMs = consumerConfig.backoffMs,
+            backoffMultiplier = consumerConfig.backoffMultiplier,
+            maxBackoffMs = consumerConfig.maxBackoffMs,
+            maxRetryTopicAttempts = consumerConfig.maxRetryTopicAttempts,
+            retryTopicBackoffMs = consumerConfig.retryTopicBackoffMs,
+            retryTopicBackoffMultiplier = consumerConfig.retryTopicBackoffMultiplier,
+            maxRetryTopicBackoffMs = consumerConfig.maxRetryTopicBackoffMs,
+            maxRetryDurationMs = consumerConfig.maxRetryDurationMs,
+            maxMessageAgeMs = consumerConfig.maxMessageAgeMs
+        )
+    }
+
+    return KafkaFlowFactory.create(
+        KafkaFlowFactoryConfig(
+            consumerProperties = mapOf(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to config.kafka.bootstrapServers,
+                ConsumerConfig.GROUP_ID_CONFIG to config.kafka.groupId,
+                // ... other properties
+            ),
+            producerProperties = mapOf(/* ... */),
+            topicResolver = DefaultTopicResolver(
+                topicConfigs = topicConfigs
+            )
+        )
+    )
+}
+```
+
+**Merging Strategy:**
+
+File-based configuration merges with `@KafkaTopic` annotations at the field level:
+
+| Source | Priority | Use Case |
+|--------|----------|----------|
+| `@KafkaTopic` annotation | Base | Default behavior, compile-time checked |
+| File config (`topicConfigs`) | Override | Environment-specific tuning |
+
+```kotlin
+// Annotation defines defaults
+@KafkaTopic(
+    name = "orders.created",
+    concurrency = 4,
+    maxInMemoryRetries = 3
+)
+class OrderCreatedConsumer : ConsumerAutoAck<String, OrderEvent> { ... }
+
+// application-prod.yaml overrides for production
+kafka:
+  consumers:
+    OrderCreatedConsumer:
+      concurrency: 16        # Override: 4 → 16
+      # maxInMemoryRetries not specified, keeps annotation value: 3
+```
+
+This pattern gives you:
+- ✅ Compile-time safety for topic bindings
+- ✅ Environment-specific tuning without redeployment
+- ✅ Sensible defaults in code, overrides in config
+- ✅ Support for multiple config file formats (YAML, HOCON, JSON, TOML via Hoplite)
+
 ---
 
 # ktor-kafka Plugin
