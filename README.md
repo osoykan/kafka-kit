@@ -40,7 +40,7 @@ A Kotlin Flow-based Kafka consumer/producer library. Write **lean consumers** th
 
 ```kotlin
 dependencies {
-    implementation("io.github.osoykan:kafka-flow:0.1.0")
+    implementation("io.github.osoykan:kafka-flow:0.1.0") // to be published
 }
 ```
 
