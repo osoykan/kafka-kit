@@ -145,109 +145,129 @@ kafka-flow provides two-level parallelism for maximum throughput:
 
 | Parameter | What It Controls | Default |
 |-----------|------------------|---------|
-| `multiplePartitions` | Number of Kafka consumer threads (Spring Kafka's `concurrency`) | 1 |
-| `concurrency` | Number of records processed in parallel per consumer thread | 4 |
+| `multiplePartitions` | Number of Kafka polling threads (Spring Kafka's `concurrency`) | 1 |
+| `concurrency` | Number of records processed in parallel (across ALL pollers) | 4 |
 
-**Total parallelism** = `multiplePartitions` × `concurrency`
+> ⚠️ **Important:** All polling threads feed into a **single Kotlin Flow**. The `concurrency` parameter controls how many records from that unified flow are processed simultaneously.
 
-#### Single Consumer Thread (`multiplePartitions = 1`)
-
-When you have one consumer thread processing all partitions:
+#### How Records Flow Through the System
 
 ```mermaid
-flowchart TB
-    subgraph Topic["📨 Topic: orders.created (3 partitions)"]
-        P0[P0] & P1[P1] & P2[P2]
+flowchart LR
+    subgraph Topic["Topic: orders.created (6 partitions)"]
+        P0["P0"] & P1["P1"] & P2["P2"] & P3["P3"] & P4["P4"] & P5["P5"]
     end
 
-    subgraph Container["multiplePartitions = 1"]
-        subgraph C1["Single Consumer Thread"]
-            C1P["Handles all partitions: P0, P1, P2"]
-            subgraph C1Flow["concurrency = 4"]
-                direction LR
-                C1R1["Record 1"] & C1R2["Record 2"] & C1R3["Record 3"] & C1R4["Record 4"]
-            end
-        end
+    subgraph Polling["multiplePartitions = 3"]
+        PT1["Poller 1"]
+        PT2["Poller 2"]
+        PT3["Poller 3"]
     end
 
-    P0 & P1 & P2 --> C1
+    subgraph Flow["Single Kotlin Flow"]
+        Channel["Shared Channel"]
+    end
+
+    subgraph Processing["concurrency = 4"]
+        W1["Worker 1"] & W2["Worker 2"] & W3["Worker 3"] & W4["Worker 4"]
+    end
+
+    P0 & P1 --> PT1
+    P2 & P3 --> PT2
+    P4 & P5 --> PT3
+    
+    PT1 & PT2 & PT3 --> Channel
+    Channel --> W1 & W2 & W3 & W4
 
     style Topic fill:#1e88e5,color:#fff
-    style Container fill:#fb8c00,color:#fff
-    style C1Flow fill:#43a047,color:#fff
+    style Polling fill:#fb8c00,color:#fff
+    style Flow fill:#7b1fa2,color:#fff
+    style Processing fill:#43a047,color:#fff
 ```
 
-> **Result:** 1 thread × 4 concurrent = **4 records in parallel**
-> 
-> ✅ Simple setup, good for low-volume topics  
-> ⚠️ Single thread handles all partitions sequentially (polling), but processes records concurrently
+> **Processing parallelism = `concurrency`** (not multiplePartitions × concurrency)
+>
+> All records merge into one flow, then `flatMapMerge(concurrency)` fans out to workers.
 
 ---
 
-#### Multiple Consumer Threads (`multiplePartitions > 1`)
-
-When you scale out with multiple consumer threads:
+#### Single Poller (`multiplePartitions = 1`)
 
 ```mermaid
-flowchart TB
-    subgraph Topic["📨 Topic: orders.created (6 partitions)"]
-        P0[P0] & P1[P1] & P2[P2] & P3[P3] & P4[P4] & P5[P5]
+flowchart LR
+    subgraph Topic["Topic (3 partitions)"]
+        P0["P0"] & P1["P1"] & P2["P2"]
     end
 
-    subgraph Container["multiplePartitions = 3"]
-        subgraph C1["Consumer Thread 1"]
-            C1P["Partitions: P0, P1"]
-            subgraph C1Flow["concurrency = 4"]
-                direction LR
-                C1R1["R1"] & C1R2["R2"] & C1R3["R3"] & C1R4["R4"]
-            end
-        end
-        
-        subgraph C2["Consumer Thread 2"]
-            C2P["Partitions: P2, P3"]
-            subgraph C2Flow["concurrency = 4"]
-                direction LR
-                C2R1["R1"] & C2R2["R2"] & C2R3["R3"] & C2R4["R4"]
-            end
-        end
-        
-        subgraph C3["Consumer Thread 3"]
-            C3P["Partitions: P4, P5"]
-            subgraph C3Flow["concurrency = 4"]
-                direction LR
-                C3R1["R1"] & C3R2["R2"] & C3R3["R3"] & C3R4["R4"]
-            end
-        end
+    subgraph Polling["multiplePartitions = 1"]
+        PT1["Single Poller"]
     end
 
-    P0 & P1 --> C1
-    P2 & P3 --> C2
-    P4 & P5 --> C3
+    subgraph Processing["concurrency = 4"]
+        W1["W1"] & W2["W2"] & W3["W3"] & W4["W4"]
+    end
+
+    P0 & P1 & P2 --> PT1 --> W1 & W2 & W3 & W4
 
     style Topic fill:#1e88e5,color:#fff
-    style Container fill:#fb8c00,color:#fff
-    style C1Flow fill:#43a047,color:#fff
-    style C2Flow fill:#43a047,color:#fff
-    style C3Flow fill:#43a047,color:#fff
+    style Polling fill:#fb8c00,color:#fff
+    style Processing fill:#43a047,color:#fff
 ```
 
-> **Result:** 3 threads × 4 concurrent = **12 records in parallel**
-> 
-> ✅ Maximum throughput for high-volume topics  
-> ✅ Each thread polls its assigned partitions independently  
-> ✅ Set `multiplePartitions` ≤ partition count for optimal distribution
+> ✅ Simple setup, good for low-volume topics  
+> ⚠️ Single thread polls all partitions (may become bottleneck at high volume)  
+> **Processing:** 4 records in parallel
+
+---
+
+#### Multiple Pollers (`multiplePartitions > 1`)
+
+```mermaid
+flowchart LR
+    subgraph Topic["Topic (6 partitions)"]
+        P0["P0"] & P1["P1"] & P2["P2"] & P3["P3"] & P4["P4"] & P5["P5"]
+    end
+
+    subgraph Polling["multiplePartitions = 3"]
+        PT1["Poller 1"]
+        PT2["Poller 2"]
+        PT3["Poller 3"]
+    end
+
+    subgraph Processing["concurrency = 4"]
+        W1["W1"] & W2["W2"] & W3["W3"] & W4["W4"]
+    end
+
+    P0 & P1 --> PT1
+    P2 & P3 --> PT2
+    P4 & P5 --> PT3
+    PT1 & PT2 & PT3 --> W1 & W2 & W3 & W4
+
+    style Topic fill:#1e88e5,color:#fff
+    style Polling fill:#fb8c00,color:#fff
+    style Processing fill:#43a047,color:#fff
+```
+
+> ✅ Faster polling from multiple partitions in parallel  
+> ✅ Better partition distribution in consumer group  
+> ✅ Reduced risk of `max.poll.interval.ms` timeout  
+> **Processing:** Still 4 records in parallel (same `concurrency`)
+
+---
 
 **`multiplePartitions`** (Spring Kafka's container concurrency):
-- Creates multiple Kafka consumer instances within the same consumer group
-- Each instance is assigned a subset of partitions
-- Set this to match your partition count for maximum parallelism
+- Creates multiple Kafka polling threads within the same consumer group
+- Each thread is assigned a subset of partitions by Kafka's group coordinator
+- **Increases polling throughput** - records are fetched faster from Kafka
+- Set this ≤ partition count (extra threads will be idle)
 - Uses virtual threads (Java 21+) by default
 
 **`concurrency`** (kafka-flow's processing parallelism):
-- Controls how many records are processed concurrently *within each consumer thread*
-- Implemented via Kotlin Flow's `flatMapMerge(concurrency)`
-- Enables parallel processing of I/O-bound operations (HTTP calls, DB queries)
-- Records from the same partition maintain ordering for commit purposes
+- **This is your actual processing parallelism**
+- All records from ALL pollers merge into a single Kotlin Flow
+- `flatMapMerge(concurrency)` processes N records simultaneously
+- Increase for I/O-bound workloads (HTTP calls, DB queries)
+- Ordered commits are still maintained per partition
 
 **Example configurations:**
 
