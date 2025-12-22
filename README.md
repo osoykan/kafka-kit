@@ -1310,7 +1310,7 @@ With [reactor-kafka being discontinued](https://spring.io/blog/2025/05/20/reacto
 
 **Alternatives:** While alternatives like [kotlin-kafka](https://github.com/nomisRev/kotlin-kafka) exist, they provide low-level Flow bindings without high-level consumer abstractions. With kotlin-kafka, you still need to manually wire consumers, retries, and error handling. kafka-kit takes a similar approach but also provides a complete, opinionated solution with automatic retry strategies, dead-letter topic handling, and comprehensive metrics out of the box.
 
-In the future releases of kafka-kit, we will create a way to plug in a custom poller (KafkaPoller interface) implementation that allows you to use alternative Kafka client libraries and implement custom polling strategies.
+In the future releases of kafka-kit, we will create a way to plug in a custom poller (KafkaPoller interface) implementation that allows you to use alternative Kafka client libraries and implement custom polling strategies. By that we can use kotlin-kafka as a poller implementation.
 
 ---
 
