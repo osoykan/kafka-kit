@@ -498,6 +498,115 @@ ListenerConfig(
 )
 ```
 
+```mermaid
+flowchart TB
+    Topic["Topic"]
+    Poller["Poller"]
+    Buffer["Buffer ▓▓▓▓▓▓▓▓░░"]
+    W1["Worker 1"]
+    W2["Worker 2"]
+    W3["Worker 3"]
+
+    Topic --> Poller
+    Poller -->|"records"| Buffer
+    Buffer -->|"flow"| W1 & W2 & W3
+    
+    Buffer -.->|"80% full → pause()"| Poller
+    W1 & W2 & W3 -.->|"30% full → resume()"| Poller
+
+    style Topic fill:#1e88e5,color:#fff
+    style Poller fill:#fb8c00,color:#fff
+    style Buffer fill:#7b1fa2,color:#fff
+    style W1 fill:#43a047,color:#fff
+    style W2 fill:#43a047,color:#fff
+    style W3 fill:#43a047,color:#fff
+```
+
+**How it works:**
+1. Records flow from Kafka → Buffer → Workers
+2. When buffer reaches 80% capacity → `pause()` stops polling
+3. Workers continue processing, draining the buffer
+4. When buffer drops to 30% → `resume()` restarts polling
+
+## Ordered Commits & Gap Detection
+
+With concurrent processing, records may complete out of order. The `OrderedCommitter` ensures offsets are committed in order and pauses consumption when gaps are detected.
+
+```mermaid
+sequenceDiagram
+    participant K as Kafka
+    participant P as Poller
+    participant W as Workers
+    participant OC as OrderedCommitter
+
+    Note over K,OC: Records arrive in order: 0, 1, 2, 3, 4
+    
+    K->>P: Poll records 0,1,2,3,4
+    P->>W: Dispatch to workers
+    
+    Note over W: Concurrent processing<br/>(out of order completion)
+    
+    W->>OC: Complete offset 2
+    Note over OC: Gap detected!<br/>Expected: 0, Got: 2
+    OC-->>P: onGapDetected → pause()
+    
+    W->>OC: Complete offset 4
+    Note over OC: Still waiting for 0,1,3
+    
+    W->>OC: Complete offset 0
+    Note over OC: Commit 0<br/>Gap remains (1 missing)
+    
+    W->>OC: Complete offset 1
+    Note over OC: Commit 1,2<br/>Gap remains (3 missing)
+    
+    W->>OC: Complete offset 3
+    Note over OC: Commit 3,4<br/>No gaps!
+    OC-->>P: onGapClosed → resume()
+    
+    K->>P: Resume polling
+```
+
+```mermaid
+flowchart LR
+    subgraph Completion["Completion Order"]
+        C1["2 ✓"] --> C2["4 ✓"] --> C3["0 ✓"] --> C4["1 ✓"] --> C5["3 ✓"]
+    end
+
+    subgraph Tracking["OrderedCommitter State"]
+        direction TB
+        S1["completed: {2}<br/>lastCommitted: -1<br/>⚠️ GAP"]
+        S2["completed: {2,4}<br/>lastCommitted: -1<br/>⚠️ GAP"]
+        S3["completed: {2,4}<br/>lastCommitted: 0<br/>⚠️ GAP"]
+        S4["completed: {4}<br/>lastCommitted: 2<br/>⚠️ GAP"]
+        S5["completed: {}<br/>lastCommitted: 4<br/>✅ NO GAP"]
+    end
+
+    subgraph Commits["Actual Commits"]
+        K1["—"]
+        K2["—"]
+        K3["Commit 0"]
+        K4["Commit 1,2"]
+        K5["Commit 3,4"]
+    end
+
+    C1 --> S1 --> K1
+    C2 --> S2 --> K2
+    C3 --> S3 --> K3
+    C4 --> S4 --> K4
+    C5 --> S5 --> K5
+
+    style S1 fill:#ff9800,color:#000
+    style S2 fill:#ff9800,color:#000
+    style S3 fill:#ff9800,color:#000
+    style S4 fill:#ff9800,color:#000
+    style S5 fill:#4caf50,color:#fff
+```
+
+**Why gap detection pauses consumption:**
+- Prevents unbounded memory growth from pending completions
+- If a record gets "stuck" (slow processing), new records won't pile up indefinitely
+- Once the stuck record completes, consumption resumes automatically
+
 ## Metrics
 
 ```kotlin
