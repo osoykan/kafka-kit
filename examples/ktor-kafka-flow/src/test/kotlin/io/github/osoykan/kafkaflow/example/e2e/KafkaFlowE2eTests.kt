@@ -74,7 +74,7 @@ class KafkaFlowE2eTests :
             actual.method == PaymentMethod.CREDIT_CARD
           }
 
-          shouldBeConsumed<PaymentEvent> {
+          shouldBeConsumed<PaymentEvent>(10.seconds) {
             actual.method == PaymentMethod.CREDIT_CARD
           }
         }

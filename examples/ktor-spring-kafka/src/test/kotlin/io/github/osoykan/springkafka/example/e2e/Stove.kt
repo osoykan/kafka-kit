@@ -3,11 +3,13 @@ package io.github.osoykan.springkafka.example.e2e
 import com.trendyol.stove.testing.e2e.*
 import com.trendyol.stove.testing.e2e.database.migrations.DatabaseMigration
 import com.trendyol.stove.testing.e2e.http.*
+import com.trendyol.stove.testing.e2e.reporting.StoveKotestExtension
 import com.trendyol.stove.testing.e2e.serialization.StoveSerde
 import com.trendyol.stove.testing.e2e.standalone.kafka.*
 import com.trendyol.stove.testing.e2e.system.*
 import io.github.osoykan.springkafka.example.run
 import io.kotest.core.config.AbstractProjectConfig
+import io.kotest.core.extensions.Extension
 import org.apache.kafka.clients.admin.NewTopic
 import org.koin.core.module.Module
 import org.koin.dsl.module
@@ -88,6 +90,8 @@ class Stove : AbstractProjectConfig() {
       System.setProperty(STOVE_KAFKA_BRIDGE_PORT, stoveKafkaBridgePortDefault)
     }
   }
+
+  override val extensions: List<Extension> = listOf(StoveKotestExtension())
 
   override suspend fun beforeProject(): Unit = TestSystem()
     .with {

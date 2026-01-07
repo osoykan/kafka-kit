@@ -11,6 +11,11 @@ version = "0.1.0"
 allprojects {
   repositories {
     mavenCentral()
+    maven("https://central.sonatype.com/repository/maven-snapshots") {
+      content {
+        includeGroup("com.trendyol")
+      }
+    }
   }
 }
 
