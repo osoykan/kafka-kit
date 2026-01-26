@@ -13,7 +13,7 @@ spotless = "8.1.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
 stove = "1.0.0.485-SNAPSHOT"
-jackson3 = "3.0.3"
+jackson3 = "3.0.4"
 
 [libraries]
 # Spring Kafka
