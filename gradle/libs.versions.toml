@@ -1,5 +1,5 @@
 [versions]
-kotlin = "2.3.0"
+kotlin = "2.3.10"
 spring-kafka = "4.0.2"
 kotlinx-coroutines = "1.10.2"
 kotlin-logging = "7.0.14"
