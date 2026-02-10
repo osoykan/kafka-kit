@@ -9,10 +9,10 @@ testcontainers = "2.0.3"
 ktor = "3.4.0"
 koin = "4.1.1"
 hoplite = "2.9.0"
-spotless = "8.1.0"
+spotless = "8.2.1"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
-stove = "1.0.0.501-SNAPSHOT"
+stove = "1.0.0.502-SNAPSHOT"
 jackson3 = "3.0.4"
 
 [libraries]
@@ -63,6 +63,6 @@ stove-bom = { module = "com.trendyol:stove-bom", version.ref = "stove" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.35.0" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.36.0" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 testlogger = { id = "com.adarshr.test-logger", version.ref = "testlogger" }
