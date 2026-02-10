@@ -1,9 +1,15 @@
+import com.trendyol.stove.gradle.configureStoveTracing
+
 plugins {
   application
 }
 
 application {
   mainClass.set("io.github.osoykan.springkafka.example.ExampleKtorAppKt")
+}
+
+configureStoveTracing {
+  serviceName = "ktor-spring-kafka-example"
 }
 
 dependencies {
@@ -40,8 +46,11 @@ dependencies {
   // Testing
   testImplementation(libs.kotest.runner.junit5)
   testImplementation(libs.kotest.assertions.core)
+  testImplementation(libs.kotest.framework.engine)
   testImplementation(stoveLibs.stove)
   testImplementation(stoveLibs.stoveHttp)
   testImplementation(stoveLibs.stoveKafka)
   testImplementation(stoveLibs.stoveKtor)
+  testImplementation(stoveLibs.stoveExtensionsKotest)
+  testImplementation(stoveLibs.stoveTracing)
 }

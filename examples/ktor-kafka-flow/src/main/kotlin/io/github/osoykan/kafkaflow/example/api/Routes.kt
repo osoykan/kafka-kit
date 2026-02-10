@@ -159,7 +159,7 @@ fun Application.configureRouting() {
       // Produce a batch of inventory events using parallel send
       post("/inventory/batch") {
         val warehouses = listOf("warehouse-1", "warehouse-2", "warehouse-3")
-        val records = (1..10).map { i ->
+        val records = (1..5).map { i ->
           val sku = "SKU-BATCH-$i"
           val event = InventoryEvent(
             sku = sku,
@@ -169,14 +169,8 @@ fun Application.configureRouting() {
           )
           ProducerRecord<String, DomainEvent>("example.inventory", sku, event)
         }
-        val results = producer.sendAllParallel(records)
-        call.respond(
-          HttpStatusCode.Accepted,
-          mapOf(
-            "count" to results.size,
-            "message" to "Batch inventory events sent in parallel"
-          )
-        )
+        producer.sendAllParallel(records)
+        call.respond(HttpStatusCode.Accepted, mapOf("message" to "Batch inventory events sent in parallel"))
       }
 
       // Produce a batch with result tracking (some may have blank SKU → will fail at consumer)

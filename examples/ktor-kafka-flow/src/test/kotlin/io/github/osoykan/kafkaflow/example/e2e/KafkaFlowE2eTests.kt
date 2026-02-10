@@ -1,9 +1,9 @@
 package io.github.osoykan.kafkaflow.example.e2e
 
 import arrow.core.None
-import com.trendyol.stove.testing.e2e.http.http
-import com.trendyol.stove.testing.e2e.standalone.kafka.kafka
-import com.trendyol.stove.testing.e2e.system.TestSystem.Companion.validate
+import com.trendyol.stove.http.http
+import com.trendyol.stove.kafka.kafka
+import com.trendyol.stove.system.stove
 import io.github.osoykan.kafkaflow.example.domain.*
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -23,7 +23,7 @@ class KafkaFlowE2eTests :
   FunSpec({
 
     test("health check should return consumer status") {
-      validate {
+      stove {
         http {
           getResponse<Any>(uri = "/health") { response ->
             response.status shouldBe 200
@@ -37,7 +37,7 @@ class KafkaFlowE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume payment event (manual ack consumer)") {
-      validate {
+      stove {
         val paymentId = UUID.randomUUID().toString()
         val event = PaymentEvent(
           paymentId = paymentId,
@@ -62,7 +62,7 @@ class KafkaFlowE2eTests :
     }
 
     test("should produce payment via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/payments", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -86,7 +86,7 @@ class KafkaFlowE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume order event (auto ack consumer)") {
-      validate {
+      stove {
         val orderId = UUID.randomUUID().toString()
         val event = OrderCreatedEvent(
           orderId = orderId,
@@ -110,7 +110,7 @@ class KafkaFlowE2eTests :
     }
 
     test("should produce order via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/orders/success", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -134,7 +134,7 @@ class KafkaFlowE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume notification event") {
-      validate {
+      stove {
         val notificationId = UUID.randomUUID().toString()
         val event = NotificationEvent(
           notificationId = notificationId,
@@ -159,7 +159,7 @@ class KafkaFlowE2eTests :
     }
 
     test("should produce notification via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/notifications", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -179,11 +179,78 @@ class KafkaFlowE2eTests :
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
+    // Inventory Batch Consumer Tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    test("should publish and consume inventory event via batch consumer") {
+      stove {
+        val sku = "SKU-${UUID.randomUUID().toString().take(8)}"
+        val event = InventoryEvent(
+          sku = sku,
+          warehouseId = "warehouse-1",
+          quantityChange = 10,
+          reason = InventoryReason.RESTOCK
+        )
+
+        kafka {
+          publish("example.inventory", event, key = sku.some())
+
+          shouldBePublished<InventoryEvent> {
+            actual.sku == sku
+          }
+
+          shouldBeConsumed<InventoryEvent>(atLeastIn = 10.seconds) {
+            actual.sku == sku
+          }
+        }
+      }
+    }
+
+    test("should produce inventory batch via HTTP and consume them") {
+      stove {
+        http {
+          postAndExpectBodilessResponse(uri = "/api/test/inventory/batch", body = None, token = None) { response ->
+            response.status shouldBe 202
+          }
+        }
+
+        kafka {
+          shouldBePublished<InventoryEvent> {
+            actual.sku.startsWith("SKU-BATCH-")
+          }
+
+          shouldBeConsumed<InventoryEvent>(10.seconds) {
+            actual.sku.startsWith("SKU-BATCH-")
+          }
+        }
+      }
+    }
+
+    test("should send inventory event with blank SKU to DLT via batch failure handler") {
+      stove {
+        val event = InventoryEvent(
+          sku = "",
+          warehouseId = "warehouse-1",
+          quantityChange = 5,
+          reason = InventoryReason.ADJUSTMENT
+        )
+
+        kafka {
+          publish("example.inventory", event, key = "blank-sku".some())
+
+          shouldBePublished<InventoryEvent> {
+            actual.sku == ""
+          }
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // DLT Test - Verify failed messages are sent to DLT
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should send invalid order to DLT after consumer fails") {
-      validate {
+      stove {
         val orderId = UUID.randomUUID().toString()
         val event = OrderCreatedEvent(
           orderId = orderId,

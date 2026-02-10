@@ -1,22 +1,20 @@
-package io.github.osoykan.springkafka.example.e2e
+package io.github.osoykan.kafkaflow.example.e2e
 
-import com.trendyol.stove.testing.e2e.*
-import com.trendyol.stove.testing.e2e.database.migrations.DatabaseMigration
-import com.trendyol.stove.testing.e2e.http.*
-import com.trendyol.stove.testing.e2e.reporting.StoveKotestExtension
-import com.trendyol.stove.testing.e2e.serialization.StoveSerde
-import com.trendyol.stove.testing.e2e.standalone.kafka.*
-import com.trendyol.stove.testing.e2e.system.*
-import io.github.osoykan.springkafka.example.run
+import com.trendyol.stove.database.migrations.DatabaseMigration
+import com.trendyol.stove.extensions.kotest.StoveKotestExtension
+import com.trendyol.stove.http.*
+import com.trendyol.stove.kafka.*
+import com.trendyol.stove.ktor.*
+import com.trendyol.stove.serialization.StoveSerde
+import com.trendyol.stove.system.*
+import com.trendyol.stove.tracing.tracing
+import io.github.osoykan.kafkaflow.example.infra.objectMapper
+import io.github.osoykan.kafkaflow.example.run
 import io.kotest.core.config.AbstractProjectConfig
 import io.kotest.core.extensions.Extension
 import org.apache.kafka.clients.admin.NewTopic
 import org.koin.core.module.Module
 import org.koin.dsl.module
-import org.springframework.kafka.support.serializer.JacksonJsonSerializer
-import tools.jackson.databind.DeserializationFeature
-import tools.jackson.databind.cfg.DateTimeFeature
-import tools.jackson.module.kotlin.*
 
 /**
  * Custom StoveSerde that aligns with the app's Jackson serialization.
@@ -29,24 +27,29 @@ import tools.jackson.module.kotlin.*
  * if the result matches the requested type.
  */
 class AppAlignedSerde : StoveSerde<Any, ByteArray> {
-  private val serde = jsonMapper {
-    addModule(kotlinModule())
-    findAndAddModules()
-    disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-    disable(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)
-    disable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
-    disable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-    enable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
-  }
-
   override fun serialize(value: Any): ByteArray = when (value) {
     is String -> value.toByteArray()
-    else -> serde.writeValueAsBytes(value)
+    else -> objectMapper.writeValueAsBytes(value)
   }
 
-  override fun <T : Any> deserialize(value: ByteArray, clazz: Class<T>): T = runCatching {
-    serde.readValue(value, clazz) as T
-  }.getOrElse { error("Unable to deserialize value $value of ${clazz.simpleName}") }
+  @Suppress("UNCHECKED_CAST")
+  override fun <T : Any> deserialize(value: ByteArray, clazz: Class<T>): T {
+    // First try to read with polymorphic type info (uses @class discriminator)
+    val result = runCatching {
+      objectMapper.readValue(value, Any::class.java)
+    }.getOrElse {
+      // Fallback: try direct deserialization to requested class
+      objectMapper.readValue(value, clazz)
+    }
+
+    // If the result is assignable to the requested type, cast it
+    return if (clazz.isInstance(result)) {
+      result as T
+    } else {
+      // If types don't match, try direct deserialization
+      objectMapper.readValue(value, clazz)
+    }
+  }
 }
 
 /**
@@ -68,7 +71,11 @@ class CreateExampleTopicsMigration : DatabaseMigration<KafkaMigrationContext> {
       // Notification topics
       NewTopic("example.notifications", 1, 1),
       NewTopic("example.notifications.retry", 1, 1),
-      NewTopic("example.notifications.dlt", 1, 1)
+      NewTopic("example.notifications.dlt", 1, 1),
+      // Inventory topics (batch consumer)
+      NewTopic("example.inventory", 1, 1),
+      NewTopic("example.inventory.retry", 1, 1),
+      NewTopic("example.inventory.dlt", 1, 1)
     )
 
     connection.admin
@@ -79,11 +86,11 @@ class CreateExampleTopicsMigration : DatabaseMigration<KafkaMigrationContext> {
 }
 
 /**
- * Stove E2E test setup for Ktor Spring Kafka example.
+ * Stove E2E test setup for Ktor Kafka Flow example.
  *
  * Uses embedded Kafka for fast, isolated testing.
  */
-class Stove : AbstractProjectConfig() {
+class StoveConfig : AbstractProjectConfig() {
   companion object {
     init {
       stoveKafkaBridgePortDefault = PortFinder.findAvailablePortAsString()
@@ -93,22 +100,24 @@ class Stove : AbstractProjectConfig() {
 
   override val extensions: List<Extension> = listOf(StoveKotestExtension())
 
-  override suspend fun beforeProject(): Unit = TestSystem()
+  override suspend fun beforeProject(): Unit = Stove()
     .with {
       httpClient {
         HttpClientSystemOptions(
           baseUrl = "http://localhost:8080"
         )
       }
+      tracing {
+        enableSpanReceiver()
+      }
       bridge()
       kafka {
         KafkaSystemOptions(
           serde = AppAlignedSerde(),
-          valueSerializer = JacksonJsonSerializer(),
           useEmbeddedKafka = true,
           listenPublishedMessagesFromStove = true,
           topicSuffixes = TopicSuffixes(
-            error = listOf(".dlt", ".DLT"),
+            error = listOf(".dlt"),
             retry = listOf(".retry")
           ),
           configureExposedConfiguration = { cfg ->
@@ -133,9 +142,7 @@ class Stove : AbstractProjectConfig() {
       )
     }.run()
 
-  override suspend fun afterProject() {
-    TestSystem.stop()
-  }
+  override suspend fun afterProject() = Stove.stop()
 }
 
 /**

@@ -1,9 +1,9 @@
 package io.github.osoykan.springkafka.example.e2e
 
 import arrow.core.None
-import com.trendyol.stove.testing.e2e.http.http
-import com.trendyol.stove.testing.e2e.standalone.kafka.kafka
-import com.trendyol.stove.testing.e2e.system.TestSystem.Companion.validate
+import com.trendyol.stove.http.http
+import com.trendyol.stove.kafka.kafka
+import com.trendyol.stove.system.stove
 import io.github.osoykan.springkafka.example.domain.*
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -22,9 +22,8 @@ import kotlin.time.Duration.Companion.seconds
  */
 class SpringKafkaE2eTests :
   FunSpec({
-
     test("health check should return consumer status") {
-      validate {
+      stove {
         http {
           getResponse<Any>(uri = "/health") { response ->
             response.status shouldBe 200
@@ -38,7 +37,7 @@ class SpringKafkaE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume payment event (suspend consumer)") {
-      validate {
+      stove {
         val paymentId = UUID.randomUUID().toString()
         val event = PaymentEvent(
           paymentId = paymentId,
@@ -63,7 +62,7 @@ class SpringKafkaE2eTests :
     }
 
     test("should produce payment via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/payments", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -87,7 +86,7 @@ class SpringKafkaE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume order event (suspend consumer)") {
-      validate {
+      stove {
         val orderId = UUID.randomUUID().toString()
         val event = OrderCreatedEvent(
           orderId = orderId,
@@ -111,7 +110,7 @@ class SpringKafkaE2eTests :
     }
 
     test("should produce order via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/orders/success", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -135,7 +134,7 @@ class SpringKafkaE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish and consume notification event") {
-      validate {
+      stove {
         val notificationId = UUID.randomUUID().toString()
         val event = NotificationEvent(
           notificationId = notificationId,
@@ -160,7 +159,7 @@ class SpringKafkaE2eTests :
     }
 
     test("should produce notification via HTTP and consume it") {
-      validate {
+      stove {
         http {
           postAndExpectBodilessResponse(uri = "/api/test/notifications", body = None, token = None) { response ->
             response.status shouldBe 202
@@ -184,7 +183,7 @@ class SpringKafkaE2eTests :
     // ─────────────────────────────────────────────────────────────────────────────
 
     test("should publish order that will fail validation") {
-      validate {
+      stove {
         val orderId = UUID.randomUUID().toString()
         val event = OrderCreatedEvent(
           orderId = orderId,
