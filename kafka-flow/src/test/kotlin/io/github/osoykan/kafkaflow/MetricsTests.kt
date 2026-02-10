@@ -74,6 +74,18 @@ class MetricsTests :
         override fun recordConsumerStopped(consumer: String) {
           delegate1Called++
         }
+
+        override fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int) {
+          delegate1Called++
+        }
+
+        override fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: kotlin.time.Duration) {
+          delegate1Called++
+        }
+
+        override fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable) {
+          delegate1Called++
+        }
       }
 
       val delegate2 = object : KafkaFlowMetrics {
@@ -112,6 +124,18 @@ class MetricsTests :
         override fun recordConsumerStopped(consumer: String) {
           delegate2Called++
         }
+
+        override fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int) {
+          delegate2Called++
+        }
+
+        override fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: kotlin.time.Duration) {
+          delegate2Called++
+        }
+
+        override fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable) {
+          delegate2Called++
+        }
       }
 
       val composite = CompositeMetrics(delegate1, delegate2)
@@ -125,8 +149,11 @@ class MetricsTests :
       composite.recordExpired("t", "c", "reason")
       composite.recordConsumerStarted("c", listOf("t"))
       composite.recordConsumerStopped("c")
+      composite.recordBatchConsumed("t", "c", 10)
+      composite.recordBatchProcessingSuccess("t", "c", 10, 100.milliseconds)
+      composite.recordBatchProcessingFailure("t", "c", 10, RuntimeException())
 
-      delegate1Called shouldBe 9
-      delegate2Called shouldBe 9
+      delegate1Called shouldBe 12
+      delegate2Called shouldBe 12
     }
   })
