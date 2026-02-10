@@ -51,11 +51,17 @@ fun kafkaModule(config: AppConfig): Module = module {
     )
   }
 
+  // Producer with parallel send support
+  single {
+    FlowKafkaProducer(get<KafkaFlowFactory<String, DomainEvent>>().kafkaTemplate())
+  }
+
   // Register your consumers here - they will be auto-discovered by ConsumerEngine
   single { OrderCreatedConsumer() } bind Consumer::class
   single { OrderCreatedDltConsumer() } bind Consumer::class
   single { PaymentConsumer() } bind Consumer::class
   single { NotificationConsumer() } bind Consumer::class
+  single { InventoryBatchConsumer() } bind Consumer::class
 }
 
 /**

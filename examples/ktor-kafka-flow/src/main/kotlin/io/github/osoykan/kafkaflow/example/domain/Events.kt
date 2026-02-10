@@ -72,3 +72,24 @@ enum class NotificationType {
   SMS,
   PUSH
 }
+
+/**
+ * Inventory update event — a good fit for batch processing
+ * because many inventory changes arrive together and
+ * can be persisted in bulk.
+ */
+data class InventoryEvent(
+  override val eventId: String = UUID.randomUUID().toString(),
+  override val timestamp: Instant = Instant.now(),
+  val sku: String,
+  val warehouseId: String,
+  val quantityChange: Int,
+  val reason: InventoryReason = InventoryReason.RESTOCK
+) : DomainEvent
+
+enum class InventoryReason {
+  RESTOCK,
+  SALE,
+  RETURN,
+  ADJUSTMENT
+}

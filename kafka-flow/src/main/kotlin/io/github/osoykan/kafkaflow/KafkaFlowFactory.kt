@@ -125,10 +125,32 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
 ) : ConsumerSupervisorFactory<K, V> {
   override fun createSupervisors(consumers: List<Consumer<K, V>>): List<ConsumerSupervisor> = consumers.map { consumer ->
     val config = topicResolver.resolve(consumer)
-    val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, dispatcher = dispatcher)
 
     when (consumer) {
+      is BatchConsumerAutoAck<K, V> -> {
+        BatchConsumerAutoAckSupervisor(
+          consumer = consumer,
+          config = config,
+          consumerFactory = consumerFactory,
+          kafkaTemplate = kafkaTemplate,
+          listenerConfig = listenerConfig,
+          metrics = metrics
+        )
+      }
+
+      is BatchConsumerManualAck<K, V> -> {
+        BatchConsumerManualAckSupervisor(
+          consumer = consumer,
+          config = config,
+          consumerFactory = consumerFactory,
+          kafkaTemplate = kafkaTemplate,
+          listenerConfig = listenerConfig,
+          metrics = metrics
+        )
+      }
+
       is ConsumerAutoAck<K, V> -> {
+        val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, dispatcher = dispatcher)
         ConsumerAutoAckSupervisor(
           consumer = consumer,
           config = config,
@@ -140,6 +162,7 @@ internal class FlowConsumerSupervisorFactory<K : Any, V : Any>(
       }
 
       is ConsumerManualAck<K, V> -> {
+        val flowConsumer = FlowKafkaConsumer(consumerFactory, listenerConfig, dispatcher = dispatcher)
         ConsumerManualAckSupervisor(
           consumer = consumer,
           config = config,

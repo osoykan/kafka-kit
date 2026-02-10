@@ -1,5 +1,5 @@
 [versions]
-kotlin = "2.3.0"
+kotlin = "2.3.10"
 spring-kafka = "4.0.2"
 kotlinx-coroutines = "1.10.2"
 kotlin-logging = "7.0.14"
@@ -12,7 +12,7 @@ hoplite = "2.9.0"
 spotless = "8.1.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
-stove = "1.0.0.485-SNAPSHOT"
+stove = "1.0.0.501-SNAPSHOT"
 jackson3 = "3.0.4"
 
 [libraries]
@@ -58,10 +58,7 @@ jackson3-kotlin = { module = "tools.jackson.module:jackson-module-kotlin", versi
 ktlint-cli = { module = "com.pinterest.ktlint:ktlint-cli", version.ref = "ktlint" }
 
 # Stove E2E Testing
-stove-testing-e2e = { module = "com.trendyol:stove-testing-e2e", version.ref = "stove" }
-stove-testing-e2e-http = { module = "com.trendyol:stove-testing-e2e-http", version.ref = "stove" }
-stove-testing-e2e-kafka = { module = "com.trendyol:stove-testing-e2e-kafka", version.ref = "stove" }
-stove-ktor-testing-e2e = { module = "com.trendyol:stove-ktor-testing-e2e", version.ref = "stove" }
+stove-bom = { module = "com.trendyol:stove-bom", version.ref = "stove" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

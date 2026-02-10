@@ -37,6 +37,19 @@ interface KafkaFlowMetrics {
   fun recordExpired(topic: String, consumer: String, reason: String)
 
   // ─────────────────────────────────────────────────────────────
+  // Batch consumer metrics
+  // ─────────────────────────────────────────────────────────────
+
+  /** Record that a batch was consumed (before processing) */
+  fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int)
+
+  /** Record successful batch processing */
+  fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: Duration)
+
+  /** Record batch processing failure */
+  fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable)
+
+  // ─────────────────────────────────────────────────────────────
   // Consumer lifecycle metrics
   // ─────────────────────────────────────────────────────────────
 
@@ -65,6 +78,12 @@ object NoOpMetrics : KafkaFlowMetrics {
   override fun recordSentToDlt(topic: String, dltTopic: String, totalAttempts: Int) = Unit
 
   override fun recordExpired(topic: String, consumer: String, reason: String) = Unit
+
+  override fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int) = Unit
+
+  override fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: Duration) = Unit
+
+  override fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable) = Unit
 
   override fun recordConsumerStarted(consumer: String, topics: List<String>) = Unit
 
@@ -105,6 +124,18 @@ class LoggingMetrics : KafkaFlowMetrics {
 
   override fun recordExpired(topic: String, consumer: String, reason: String) {
     logger.warn { "Expired: topic=$topic, consumer=$consumer, reason=$reason" }
+  }
+
+  override fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int) {
+    logger.debug { "Batch consumed: topic=$topic, consumer=$consumer, batchSize=$batchSize" }
+  }
+
+  override fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: Duration) {
+    logger.debug { "Batch success: topic=$topic, consumer=$consumer, batchSize=$batchSize, duration=$duration" }
+  }
+
+  override fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable) {
+    logger.debug { "Batch failure: topic=$topic, consumer=$consumer, batchSize=$batchSize, exception=${exception::class.simpleName}" }
   }
 
   override fun recordConsumerStarted(consumer: String, topics: List<String>) {
@@ -151,6 +182,18 @@ class CompositeMetrics(
 
   override fun recordExpired(topic: String, consumer: String, reason: String) {
     delegates.forEach { it.recordExpired(topic, consumer, reason) }
+  }
+
+  override fun recordBatchConsumed(topic: String, consumer: String, batchSize: Int) {
+    delegates.forEach { it.recordBatchConsumed(topic, consumer, batchSize) }
+  }
+
+  override fun recordBatchProcessingSuccess(topic: String, consumer: String, batchSize: Int, duration: Duration) {
+    delegates.forEach { it.recordBatchProcessingSuccess(topic, consumer, batchSize, duration) }
+  }
+
+  override fun recordBatchProcessingFailure(topic: String, consumer: String, batchSize: Int, exception: Throwable) {
+    delegates.forEach { it.recordBatchProcessingFailure(topic, consumer, batchSize, exception) }
   }
 
   override fun recordConsumerStarted(consumer: String, topics: List<String>) {

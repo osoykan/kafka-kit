@@ -40,8 +40,8 @@ dependencies {
   // Testing
   testImplementation(libs.kotest.runner.junit5)
   testImplementation(libs.kotest.assertions.core)
-  testImplementation(libs.stove.testing.e2e)
-  testImplementation(libs.stove.testing.e2e.http)
-  testImplementation(libs.stove.testing.e2e.kafka)
-  testImplementation(libs.stove.ktor.testing.e2e)
+  testImplementation(stoveLibs.stove)
+  testImplementation(stoveLibs.stoveHttp)
+  testImplementation(stoveLibs.stoveKafka)
+  testImplementation(stoveLibs.stoveKtor)
 }

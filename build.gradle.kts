@@ -8,17 +8,6 @@ plugins {
 group = "io.github.osoykan"
 version = "0.1.0"
 
-allprojects {
-  repositories {
-    mavenCentral()
-    maven("https://central.sonatype.com/repository/maven-snapshots") {
-      content {
-        includeGroup("com.trendyol")
-      }
-    }
-  }
-}
-
 subprojects {
   apply(plugin = "org.jetbrains.kotlin.jvm")
   apply(plugin = "com.diffplug.spotless")

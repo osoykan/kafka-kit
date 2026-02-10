@@ -1,8 +1,7 @@
 package io.github.osoykan.kafkaflow
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -154,16 +153,7 @@ class FlowKafkaProducer<K : Any, V : Any>(
    */
   fun sendFlowWithResults(records: Flow<ProducerRecord<K, V>>): Flow<SendResult<K, V>> = flow {
     checkNotClosed()
-    records.collect { record ->
-      val result = try {
-        val metadata = kafkaTemplate.send(record).await().recordMetadata
-        SendResult.Success(record, metadata)
-      } catch (e: Exception) {
-        logger.error(e) { "Failed to send record to topic: ${record.topic()} with key: ${record.key()}" }
-        SendResult.Failure(record, e)
-      }
-      emit(result)
-    }
+    records.collect { record -> emit(sendWithResult(record)) }
   }.flowOn(dispatcher)
 
   /**
@@ -187,14 +177,42 @@ class FlowKafkaProducer<K : Any, V : Any>(
    */
   suspend fun sendAllWithResults(records: List<ProducerRecord<K, V>>): List<SendResult<K, V>> {
     checkNotClosed()
-    return records.map { record ->
-      try {
-        val metadata = kafkaTemplate.send(record).await().recordMetadata
-        SendResult.Success(record, metadata)
-      } catch (e: Exception) {
-        logger.error(e) { "Failed to send record to topic: ${record.topic()}" }
-        SendResult.Failure(record, e)
-      }
+    return records.map { sendWithResult(it) }
+  }
+
+  /**
+   * Sends multiple records concurrently using coroutines.
+   *
+   * All records are sent in parallel and the function returns when all have completed.
+   * If any send fails, the exception is propagated.
+   *
+   * @param records List of producer records to send
+   * @return List of record metadata for all sends
+   * @throws Exception if any send fails
+   */
+  suspend fun sendAllParallel(records: List<ProducerRecord<K, V>>): List<RecordMetadata> {
+    checkNotClosed()
+    return coroutineScope {
+      records
+        .map { record ->
+          async { kafkaTemplate.send(record).await().recordMetadata }
+        }.awaitAll()
+    }
+  }
+
+  /**
+   * Sends multiple records concurrently with result tracking.
+   *
+   * All records are sent in parallel. Unlike [sendAllParallel], this captures
+   * both successes and failures per record, allowing partial failure handling.
+   *
+   * @param records List of producer records to send
+   * @return List of send results (success or failure for each record)
+   */
+  suspend fun sendAllParallelWithResults(records: List<ProducerRecord<K, V>>): List<SendResult<K, V>> {
+    checkNotClosed()
+    return coroutineScope {
+      records.map { record -> async { sendWithResult(record) } }.awaitAll()
     }
   }
 
@@ -219,6 +237,14 @@ class FlowKafkaProducer<K : Any, V : Any>(
    * Checks if the producer is closed.
    */
   fun isClosed(): Boolean = closed.get()
+
+  private suspend fun sendWithResult(record: ProducerRecord<K, V>): SendResult<K, V> = try {
+    val metadata = kafkaTemplate.send(record).await().recordMetadata
+    SendResult.Success(record, metadata)
+  } catch (e: Exception) {
+    logger.error(e) { "Failed to send record to topic: ${record.topic()} with key: ${record.key()}" }
+    SendResult.Failure(record, e)
+  }
 
   private fun checkNotClosed() {
     check(!closed.get()) { "FlowKafkaProducer is closed" }

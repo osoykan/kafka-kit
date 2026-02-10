@@ -1,13 +1,12 @@
 package io.github.osoykan.kafkaflow.example.api
 
-import io.github.osoykan.kafkaflow.ConsumerEngine
-import io.github.osoykan.kafkaflow.KafkaFlowFactory
-import io.github.osoykan.kafkaflow.await
+import io.github.osoykan.kafkaflow.*
 import io.github.osoykan.kafkaflow.example.domain.*
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.apache.kafka.clients.producer.ProducerRecord
 import org.koin.ktor.ext.inject
 import java.math.BigDecimal
 import java.util.*
@@ -19,6 +18,7 @@ fun Application.configureRouting() {
   val kafkaFactory by inject<KafkaFlowFactory<String, DomainEvent>>()
   val kafkaTemplate = kafkaFactory.kafkaTemplate()
   val consumerEngine by inject<ConsumerEngine<String, DomainEvent>>()
+  val producer by inject<FlowKafkaProducer<String, DomainEvent>>()
 
   routing {
     // Health check
@@ -137,6 +137,73 @@ fun Application.configureRouting() {
         )
         kafkaTemplate.send("example.notifications", notificationId, event).await()
         call.respond(HttpStatusCode.Accepted, mapOf("notificationId" to notificationId, "message" to "Push notification sent"))
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // Inventory batch endpoints — demonstrate BatchConsumer + FlowKafkaProducer
+      // ─────────────────────────────────────────────────────────────
+
+      // Produce a single inventory event
+      post("/inventory") {
+        val sku = "SKU-${UUID.randomUUID().toString().take(8)}"
+        val event = InventoryEvent(
+          sku = sku,
+          warehouseId = "warehouse-1",
+          quantityChange = 10,
+          reason = InventoryReason.RESTOCK
+        )
+        producer.send("example.inventory", sku, event)
+        call.respond(HttpStatusCode.Accepted, mapOf("sku" to sku, "message" to "Inventory event sent"))
+      }
+
+      // Produce a batch of inventory events using parallel send
+      post("/inventory/batch") {
+        val warehouses = listOf("warehouse-1", "warehouse-2", "warehouse-3")
+        val records = (1..10).map { i ->
+          val sku = "SKU-BATCH-$i"
+          val event = InventoryEvent(
+            sku = sku,
+            warehouseId = warehouses[i % warehouses.size],
+            quantityChange = i * 5,
+            reason = if (i % 2 == 0) InventoryReason.RESTOCK else InventoryReason.SALE
+          )
+          ProducerRecord<String, DomainEvent>("example.inventory", sku, event)
+        }
+        val results = producer.sendAllParallel(records)
+        call.respond(
+          HttpStatusCode.Accepted,
+          mapOf(
+            "count" to results.size,
+            "message" to "Batch inventory events sent in parallel"
+          )
+        )
+      }
+
+      // Produce a batch with result tracking (some may have blank SKU → will fail at consumer)
+      post("/inventory/batch-with-results") {
+        val records = (1..5).map { i ->
+          val sku = if (i == 3) "" else "SKU-RESULT-$i" // blank SKU will fail consumer validation
+          val event = InventoryEvent(
+            sku = sku,
+            warehouseId = "warehouse-1",
+            quantityChange = i,
+            reason = InventoryReason.ADJUSTMENT
+          )
+          ProducerRecord<String, DomainEvent>("example.inventory", sku, event)
+        }
+        val results = producer.sendAllParallelWithResults(records)
+        val summary = results.map { result ->
+          when (result) {
+            is SendResult.Success -> mapOf(
+              "status" to "sent",
+              "topic" to result.metadata.topic(),
+              "partition" to result.metadata.partition()
+            )
+
+            is SendResult.Failure -> mapOf("status" to "failed", "error" to (result.exception.message ?: "unknown"))
+          }
+        }
+        call.respond(HttpStatusCode.Accepted, mapOf("results" to summary))
       }
     }
   }
