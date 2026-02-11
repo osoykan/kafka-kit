@@ -219,7 +219,7 @@ class KafkaFlowE2eTests :
             actual.sku.startsWith("SKU-BATCH-")
           }
 
-          shouldBeConsumed<InventoryEvent>(10.seconds) {
+          shouldBeConsumed<InventoryEvent>(atLeastIn = 10.seconds) {
             actual.sku.startsWith("SKU-BATCH-")
           }
         }

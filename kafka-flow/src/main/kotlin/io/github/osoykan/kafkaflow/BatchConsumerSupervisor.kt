@@ -1,15 +1,16 @@
 package io.github.osoykan.kafkaflow
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.coroutines.runBlocking
+import io.github.osoykan.kafkaflow.poller.BackpressureController
+import io.github.osoykan.kafkaflow.poller.ContainerConfiguration
+import io.github.osoykan.kafkaflow.poller.ContainerRef
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
 import org.apache.kafka.clients.consumer.ConsumerRecord
-import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.listener.BatchAcknowledgingMessageListener
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
-import org.springframework.kafka.listener.ContainerProperties
-import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.nanoseconds
 
@@ -20,8 +21,15 @@ import kotlin.time.Duration.Companion.nanoseconds
  * No flow pipeline, no [OrderedCommitter] - the entire batch is acknowledged after processing.
  * No automatic retry - the user handles per-record failures via [FailureHandler].
  *
+ * Uses a channel to bridge the Spring Kafka listener thread to a coroutine, following the same
+ * pattern as [io.github.osoykan.kafkaflow.poller.SpringKafkaPoller]. The channel's
+ * [trySendBlocking] provides natural backpressure by blocking the listener thread when the
+ * channel is full, and [BackpressureController] adds container pause/resume on top.
+ *
  * Subclasses only differ in how they invoke the consumer and handle acknowledgment.
  */
+private const val BATCH_CHANNEL_CAPACITY = 4
+
 abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
   private val consumer: Consumer<K, V>,
   private val config: ResolvedConsumerConfig,
@@ -32,6 +40,10 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
 ) : ConsumerSupervisor {
   protected val log = KotlinLogging.logger("BatchSupervisor[${consumer.consumerName}]")
   protected val failureHandler = DefaultFailureHandler<K, V>(kafkaTemplate, config)
+
+  private val scope = CoroutineScope(
+    Dispatchers.IO + SupervisorJob() + CoroutineName(consumer.consumerName)
+  )
 
   private val containers = mutableListOf<ConcurrentMessageListenerContainer<K, V>>()
   private val running = AtomicBoolean(false)
@@ -50,51 +62,76 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
   }
 
   /**
-   * Invoked inside the batch listener. Subclasses bridge to the consumer's
-   * suspend function and handle acknowledgment.
+   * Invoked inside the batch processing coroutine.
+   * Subclasses bridge to the consumer's suspend function and handle acknowledgment.
    */
-  protected abstract fun onBatch(
+  protected abstract suspend fun onBatch(
     records: List<ConsumerRecord<K, V>>,
     failureHandler: FailureHandler<K, V>,
     springAck: org.springframework.kafka.support.Acknowledgment?
   )
 
+  /**
+   * Envelope sent through the channel from the listener thread to the processing coroutine.
+   */
+  private data class BatchEnvelope<K : Any, V : Any>(
+    val records: List<ConsumerRecord<K, V>>,
+    val ack: org.springframework.kafka.support.Acknowledgment?
+  )
+
   private fun startContainer(topicConfig: TopicConfig) {
-    val containerProps = createContainerProperties(topicConfig)
-    containerProps.setMessageListener(
-      BatchAcknowledgingMessageListener<K, V> { records, ack ->
+    val containerRef = ContainerRef<K, V>()
+    val batchChannel = Channel<BatchEnvelope<K, V>>(capacity = BATCH_CHANNEL_CAPACITY)
+
+    val backpressure = BackpressureController(
+      containerProvider = { containerRef.get() },
+      config = listenerConfig.backpressure,
+      bufferCapacity = BATCH_CHANNEL_CAPACITY,
+      topicName = topicConfig.displayName
+    )
+
+    // Launch coroutine to process batches from the channel
+    scope.launch {
+      for (envelope in batchChannel) {
         val startTime = System.nanoTime()
         try {
-          metrics.recordBatchConsumed(topicConfig.displayName, consumerName, records.size)
-          onBatch(records, failureHandler, ack)
+          metrics.recordBatchConsumed(topicConfig.displayName, consumerName, envelope.records.size)
+          onBatch(envelope.records, failureHandler, envelope.ack)
           val duration = (System.nanoTime() - startTime).nanoseconds
-          metrics.recordBatchProcessingSuccess(topicConfig.displayName, consumerName, records.size, duration)
+          metrics.recordBatchProcessingSuccess(topicConfig.displayName, consumerName, envelope.records.size, duration)
         } catch (e: Exception) {
           log.error(e) { "Batch processing failed for topic: ${topicConfig.displayName}" }
-          metrics.recordBatchProcessingFailure(topicConfig.displayName, consumerName, records.size, e)
-          throw e
+          metrics.recordBatchProcessingFailure(topicConfig.displayName, consumerName, envelope.records.size, e)
+        } finally {
+          backpressure.onBufferConsume()
         }
+      }
+    }
+
+    val containerProps = ContainerConfiguration.createContainerProperties(topicConfig, listenerConfig)
+    containerProps.setMessageListener(
+      BatchAcknowledgingMessageListener<K, V> { records, ack ->
+        batchChannel
+          .trySendBlocking(BatchEnvelope(records, ack))
+          .onSuccess { backpressure.onBufferAdd() }
+          .onFailure { e ->
+            if (e !is CancellationException) {
+              log.error(e) { "Failed to send batch to channel for ${topicConfig.displayName}" }
+            }
+          }
       }
     )
 
-    val container = ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
-      concurrency = topicConfig.effectiveMultiplePartitions(listenerConfig.multiplePartitions)
-    }
+    val container = ContainerConfiguration.createContainer(consumerFactory, containerProps, topicConfig, listenerConfig)
+    containerRef.set(container)
     containers.add(container)
     container.start()
-    log.info { "Started batch container for [${topicConfig.displayName}]" }
-  }
-
-  private fun createContainerProperties(topicConfig: TopicConfig): ContainerProperties =
-    ContainerProperties(*topicConfig.topics.toTypedArray()).apply {
-      pollTimeout = topicConfig.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
-      ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
-      idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
-      isSyncCommits = true
-      syncCommitTimeout = Duration.ofSeconds(5)
-      val executor = SimpleAsyncTaskExecutor("batch-kafka-vt-").apply { setVirtualThreads(true) }
-      listenerTaskExecutor = executor
+    log.info {
+      "Started batch container for [${topicConfig.displayName}], " +
+        "partitions: ${container.concurrency}, " +
+        "backpressure: ${if (listenerConfig.backpressure.enabled) "enabled" else "disabled"}"
     }
+  }
 
   override fun stop() {
     if (!running.getAndSet(false)) {
@@ -102,6 +139,7 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
       return
     }
     log.info { "Stopping batch consumer" }
+    scope.cancel()
     containers.forEach { container ->
       runCatching { container.stop() }
         .onFailure { e -> log.error(e) { "Error stopping container" } }
@@ -124,12 +162,12 @@ class BatchConsumerAutoAckSupervisor<K : Any, V : Any>(
   listenerConfig: ListenerConfig,
   metrics: KafkaFlowMetrics = NoOpMetrics
 ) : AbstractBatchConsumerSupervisor<K, V>(consumer, config, consumerFactory, kafkaTemplate, listenerConfig, metrics) {
-  override fun onBatch(
+  override suspend fun onBatch(
     records: List<ConsumerRecord<K, V>>,
     failureHandler: FailureHandler<K, V>,
     springAck: org.springframework.kafka.support.Acknowledgment?
   ) {
-    runBlocking { consumer.consume(records, failureHandler) }
+    consumer.consume(records, failureHandler)
     springAck?.acknowledge()
   }
 }
@@ -146,12 +184,12 @@ class BatchConsumerManualAckSupervisor<K : Any, V : Any>(
   listenerConfig: ListenerConfig,
   metrics: KafkaFlowMetrics = NoOpMetrics
 ) : AbstractBatchConsumerSupervisor<K, V>(consumer, config, consumerFactory, kafkaTemplate, listenerConfig, metrics) {
-  override fun onBatch(
+  override suspend fun onBatch(
     records: List<ConsumerRecord<K, V>>,
     failureHandler: FailureHandler<K, V>,
     springAck: org.springframework.kafka.support.Acknowledgment?
   ) {
     val kafkaFlowAck = Acknowledgment { springAck?.acknowledge() }
-    runBlocking { consumer.consume(records, failureHandler, kafkaFlowAck) }
+    consumer.consume(records, failureHandler, kafkaFlowAck)
   }
 }

@@ -5,10 +5,8 @@ import io.github.osoykan.kafkaflow.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
-import org.springframework.core.task.SimpleAsyncTaskExecutor
 import org.springframework.kafka.core.ConsumerFactory
 import org.springframework.kafka.listener.*
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -126,11 +124,11 @@ class SpringKafkaPoller<K : Any, V : Any>(
     )
 
     val listener = createListener(commitChannel, backpressure)
-    val containerProps = createContainerProperties(topic).apply {
+    val containerProps = ContainerConfiguration.createContainerProperties(topic, listenerConfig).apply {
       setMessageListener(listener)
     }
 
-    val container = createContainer(topic, containerProps)
+    val container = ContainerConfiguration.createContainer(consumerFactory, containerProps, topic, listenerConfig, errorHandler)
     containerRef.set(container)
     containers[topic.displayName] = container
     container.start()
@@ -155,32 +153,6 @@ class SpringKafkaPoller<K : Any, V : Any>(
     onRecordEmitted = { backpressure.onBufferAdd() },
     onRecordAcknowledged = { backpressure.onBufferConsume() }
   )
-
-  private fun createContainerProperties(topic: TopicConfig): ContainerProperties =
-    ContainerProperties(*topic.topics.toTypedArray()).apply {
-      pollTimeout = topic.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
-      // Always use MANUAL_IMMEDIATE - OrderedCommitter handles commit ordering
-      ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
-      idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
-      isSyncCommits = true
-      syncCommitTimeout = Duration.ofSeconds(5)
-      configureVirtualThreads(this, topic)
-    }
-
-  private fun configureVirtualThreads(props: ContainerProperties, topic: TopicConfig) {
-    val executor = SimpleAsyncTaskExecutor("spring-kafka-vt-").apply { setVirtualThreads(true) }
-    props.listenerTaskExecutor = executor
-    logger.debug { "SpringKafkaPoller: Using virtual threads for topics: [${topic.displayName}]" }
-  }
-
-  private fun createContainer(
-    topic: TopicConfig,
-    containerProps: ContainerProperties
-  ): ConcurrentMessageListenerContainer<K, V> =
-    ConcurrentMessageListenerContainer(consumerFactory, containerProps).apply {
-      concurrency = topic.effectiveMultiplePartitions(listenerConfig.multiplePartitions)
-      errorHandler?.let { commonErrorHandler = it }
-    }
 
   // endregion
 
@@ -277,19 +249,4 @@ class SpringKafkaPoller<K : Any, V : Any>(
   }
 
   // endregion
-}
-
-/**
- * Thread-safe holder for late-initialized container reference.
- * Used to allow gap detection callbacks to pause/resume the container.
- */
-internal class ContainerRef<K : Any, V : Any> {
-  @Volatile
-  private lateinit var container: ConcurrentMessageListenerContainer<K, V>
-
-  fun set(c: ConcurrentMessageListenerContainer<K, V>) {
-    container = c
-  }
-
-  fun get(): ConcurrentMessageListenerContainer<K, V> = container
 }
