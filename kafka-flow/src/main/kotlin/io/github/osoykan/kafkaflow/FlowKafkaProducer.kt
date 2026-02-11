@@ -2,9 +2,6 @@ package io.github.osoykan.kafkaflow
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.future.await
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.clients.producer.RecordMetadata
@@ -36,17 +33,14 @@ sealed class SendResult<K : Any, V : Any> {
 }
 
 /**
- * Flow-based Kafka producer that wraps Spring Kafka's KafkaTemplate.
+ * Coroutine-friendly Kafka producer that wraps Spring Kafka's KafkaTemplate.
  *
- * Provides coroutine-friendly suspend functions and Flow-based batch sending
- * with proper error handling.
+ * Provides suspend functions for sending records with proper error handling.
  *
  * @param kafkaTemplate The Spring Kafka template
- * @param dispatcher Coroutine dispatcher (defaults to Dispatchers.IO)
  */
 class FlowKafkaProducer<K : Any, V : Any>(
-  private val kafkaTemplate: KafkaTemplate<K, V>,
-  private val dispatcher: CoroutineDispatcher = Dispatchers.IO
+  private val kafkaTemplate: KafkaTemplate<K, V>
 ) {
   private val closed = AtomicBoolean(false)
 
@@ -123,61 +117,6 @@ class FlowKafkaProducer<K : Any, V : Any>(
     checkNotClosed()
     logger.debug { "Sending record to topic: ${record.topic()} with key: ${record.key()}" }
     return kafkaTemplate.send(record).await().recordMetadata
-  }
-
-  /**
-   * Sends a batch of records as a Flow.
-   *
-   * Each record is sent and the result is emitted as it completes.
-   * This allows for streaming batch sends with backpressure support.
-   *
-   * @param records Flow of producer records to send
-   * @return Flow of record metadata for successful sends
-   */
-  fun sendFlow(records: Flow<ProducerRecord<K, V>>): Flow<RecordMetadata> = flow {
-    checkNotClosed()
-    records.collect { record ->
-      val metadata = kafkaTemplate.send(record).await().recordMetadata
-      emit(metadata)
-    }
-  }.flowOn(dispatcher)
-
-  /**
-   * Sends a batch of records with result tracking.
-   *
-   * Unlike sendFlow, this captures both successes and failures,
-   * allowing you to handle partial batch failures.
-   *
-   * @param records Flow of producer records to send
-   * @return Flow of send results (success or failure)
-   */
-  fun sendFlowWithResults(records: Flow<ProducerRecord<K, V>>): Flow<SendResult<K, V>> = flow {
-    checkNotClosed()
-    records.collect { record -> emit(sendWithResult(record)) }
-  }.flowOn(dispatcher)
-
-  /**
-   * Sends multiple records from a list.
-   *
-   * @param records List of producer records to send
-   * @return List of record metadata for all successful sends
-   */
-  suspend fun sendAll(records: List<ProducerRecord<K, V>>): List<RecordMetadata> {
-    checkNotClosed()
-    return records.map { record ->
-      kafkaTemplate.send(record).await().recordMetadata
-    }
-  }
-
-  /**
-   * Sends multiple records with result tracking.
-   *
-   * @param records List of producer records to send
-   * @return List of send results
-   */
-  suspend fun sendAllWithResults(records: List<ProducerRecord<K, V>>): List<SendResult<K, V>> {
-    checkNotClosed()
-    return records.map { sendWithResult(it) }
   }
 
   /**

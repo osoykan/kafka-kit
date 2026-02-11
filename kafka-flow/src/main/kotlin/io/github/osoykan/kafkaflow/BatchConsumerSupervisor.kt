@@ -81,7 +81,10 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
 
   private fun startContainer(topicConfig: TopicConfig) {
     val containerRef = ContainerRef<K, V>()
-    val batchChannel = Channel<BatchEnvelope<K, V>>(capacity = BATCH_CHANNEL_CAPACITY)
+    // UNLIMITED so trySend never blocks the consumer thread.
+    // Blocking the consumer thread would deadlock with MANUAL_IMMEDIATE ack mode
+    // because acknowledge() needs the consumer thread to commit offsets.
+    val batchChannel = Channel<BatchEnvelope<K, V>>(capacity = Channel.UNLIMITED)
 
     val backpressure = BackpressureController(
       containerProvider = { containerRef.get() },
@@ -112,14 +115,12 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
     containerProps.setMessageListener(
       BatchAcknowledgingMessageListener<K, V> { records, ack ->
         backpressure.onBufferAdd()
-        batchChannel
-          .trySendBlocking(BatchEnvelope(records, ack))
-          .onFailure { e ->
-            backpressure.onBufferConsume()
-            if (e !is CancellationException) {
-              log.error(e) { "Failed to send batch to channel for ${topicConfig.displayName}" }
-            }
+        batchChannel.trySend(BatchEnvelope(records, ack)).onFailure { e ->
+          backpressure.onBufferConsume()
+          if (e !is CancellationException) {
+            log.error(e) { "Failed to send batch to channel for ${topicConfig.displayName}" }
           }
+        }
       }
     )
 

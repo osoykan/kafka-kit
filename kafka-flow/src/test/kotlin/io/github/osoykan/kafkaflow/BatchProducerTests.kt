@@ -76,11 +76,8 @@ class BatchProducerTests :
         ProducerRecord(topic, "key-$i", "value-$i")
       }
 
-      // Just verify it works correctly - both should return the same count
       val parallelResults = producer.sendAllParallel(records)
-      val sequentialResults = producer.sendAll(records)
 
       parallelResults.size shouldBe 50
-      sequentialResults.size shouldBe 50
     }
   })
