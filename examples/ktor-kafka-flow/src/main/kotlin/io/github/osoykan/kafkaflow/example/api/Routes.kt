@@ -185,17 +185,13 @@ fun Application.configureRouting() {
           )
           ProducerRecord<String, DomainEvent>("example.inventory", sku, event)
         }
-        val results = producer.sendAllParallelWithResults(records)
+        val results = producer.sendAllParallel(records)
         val summary = results.map { result ->
-          when (result) {
-            is SendResult.Success -> mapOf(
-              "status" to "sent",
-              "topic" to result.metadata.topic(),
-              "partition" to result.metadata.partition()
-            )
-
-            is SendResult.Failure -> mapOf("status" to "failed", "error" to (result.exception.message ?: "unknown"))
-          }
+          mapOf(
+            "status" to "sent",
+            "topic" to result.topic(),
+            "partition" to result.partition()
+          )
         }
         call.respond(HttpStatusCode.Accepted, mapOf("results" to summary))
       }

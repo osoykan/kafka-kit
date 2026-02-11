@@ -1,36 +1,15 @@
 package io.github.osoykan.kafkaflow
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import kotlinx.coroutines.*
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.future.asDeferred
 import kotlinx.coroutines.future.await
-import org.apache.kafka.clients.producer.ProducerRecord
-import org.apache.kafka.clients.producer.RecordMetadata
+import org.apache.kafka.clients.producer.*
 import org.apache.kafka.common.header.internals.RecordHeader
 import org.springframework.kafka.core.KafkaTemplate
 import java.util.concurrent.atomic.AtomicBoolean
 
 private val logger = KotlinLogging.logger {}
-
-/**
- * Result of a send operation.
- */
-sealed class SendResult<K : Any, V : Any> {
-  /**
-   * Successful send result.
-   */
-  data class Success<K : Any, V : Any>(
-    val record: ProducerRecord<K, V>,
-    val metadata: RecordMetadata
-  ) : SendResult<K, V>()
-
-  /**
-   * Failed send result.
-   */
-  data class Failure<K : Any, V : Any>(
-    val record: ProducerRecord<K, V>,
-    val exception: Throwable
-  ) : SendResult<K, V>()
-}
 
 /**
  * Coroutine-friendly Kafka producer that wraps Spring Kafka's KafkaTemplate.
@@ -131,28 +110,10 @@ class FlowKafkaProducer<K : Any, V : Any>(
    */
   suspend fun sendAllParallel(records: List<ProducerRecord<K, V>>): List<RecordMetadata> {
     checkNotClosed()
-    return coroutineScope {
-      records
-        .map { record ->
-          async { kafkaTemplate.send(record).await().recordMetadata }
-        }.awaitAll()
-    }
-  }
-
-  /**
-   * Sends multiple records concurrently with result tracking.
-   *
-   * All records are sent in parallel. Unlike [sendAllParallel], this captures
-   * both successes and failures per record, allowing partial failure handling.
-   *
-   * @param records List of producer records to send
-   * @return List of send results (success or failure for each record)
-   */
-  suspend fun sendAllParallelWithResults(records: List<ProducerRecord<K, V>>): List<SendResult<K, V>> {
-    checkNotClosed()
-    return coroutineScope {
-      records.map { record -> async { sendWithResult(record) } }.awaitAll()
-    }
+    return records
+      .map { record -> kafkaTemplate.send(record).asDeferred() }
+      .awaitAll()
+      .map { it.recordMetadata }
   }
 
   /**
@@ -177,37 +138,7 @@ class FlowKafkaProducer<K : Any, V : Any>(
    */
   fun isClosed(): Boolean = closed.get()
 
-  private suspend fun sendWithResult(record: ProducerRecord<K, V>): SendResult<K, V> = try {
-    val metadata = kafkaTemplate.send(record).await().recordMetadata
-    SendResult.Success(record, metadata)
-  } catch (e: Exception) {
-    logger.error(e) { "Failed to send record to topic: ${record.topic()} with key: ${record.key()}" }
-    SendResult.Failure(record, e)
-  }
-
   private fun checkNotClosed() {
     check(!closed.get()) { "FlowKafkaProducer is closed" }
-  }
-}
-
-/**
- * Extension function to create a ProducerRecord with headers.
- */
-fun <K : Any, V : Any> producerRecord(
-  topic: String,
-  key: K,
-  value: V,
-  headers: Map<String, ByteArray> = emptyMap(),
-  partition: Int? = null,
-  timestamp: Long? = null
-): ProducerRecord<K, V> = ProducerRecord<K, V>(
-  topic,
-  partition,
-  timestamp,
-  key,
-  value
-).apply {
-  headers.forEach { (headerKey, headerValue) ->
-    headers().add(RecordHeader(headerKey, headerValue))
   }
 }
