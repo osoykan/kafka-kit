@@ -111,10 +111,11 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
     val containerProps = ContainerConfiguration.createContainerProperties(topicConfig, listenerConfig)
     containerProps.setMessageListener(
       BatchAcknowledgingMessageListener<K, V> { records, ack ->
+        backpressure.onBufferAdd()
         batchChannel
           .trySendBlocking(BatchEnvelope(records, ack))
-          .onSuccess { backpressure.onBufferAdd() }
           .onFailure { e ->
+            backpressure.onBufferConsume()
             if (e !is CancellationException) {
               log.error(e) { "Failed to send batch to channel for ${topicConfig.displayName}" }
             }
