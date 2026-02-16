@@ -21,7 +21,7 @@ private val logger = KotlinLogging.logger {}
  * @param topicName Topic name for logging
  */
 internal class BackpressureController(
-  private val containerProvider: () -> ConcurrentMessageListenerContainer<*, *>,
+  private val pauseController: PauseController,
   private val config: BackpressureConfig,
   private val bufferCapacity: Int,
   private val topicName: String
@@ -32,9 +32,6 @@ internal class BackpressureController(
   private val pauseThresholdCount = (bufferCapacity * config.pauseThreshold).toInt()
   private val resumeThresholdCount = (bufferCapacity * config.resumeThreshold).toInt()
 
-  private val container: ConcurrentMessageListenerContainer<*, *>
-    get() = containerProvider()
-
   /**
    * Called when a record is added to the buffer.
    * May pause the container if buffer exceeds pause threshold.
@@ -44,8 +41,8 @@ internal class BackpressureController(
 
     val count = bufferCount.incrementAndGet()
     if (count >= pauseThresholdCount && paused.compareAndSet(false, true)) {
-      container.pause()
-      logger.info { "Backpressure: Paused container for $topicName (buffer: $count/$bufferCapacity)" }
+      pauseController.requestPause(PauseReason.BACKPRESSURE)
+      logger.info { "Backpressure: Requested pause for $topicName (buffer: $count/$bufferCapacity)" }
     }
   }
 
@@ -58,8 +55,8 @@ internal class BackpressureController(
 
     val count = bufferCount.decrementAndGet()
     if (count <= resumeThresholdCount && paused.compareAndSet(true, false)) {
-      container.resume()
-      logger.info { "Backpressure: Resumed container for $topicName (buffer: $count/$bufferCapacity)" }
+      pauseController.clearPause(PauseReason.BACKPRESSURE)
+      logger.info { "Backpressure: Cleared pause for $topicName (buffer: $count/$bufferCapacity)" }
     }
   }
 }

@@ -4,17 +4,30 @@ import io.github.osoykan.kafkaflow.TopicConfig
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A record with its acknowledgment for commit control.
  *
+ * Acknowledgment is idempotent — calling [acknowledge] multiple times
+ * only triggers the underlying callback once. This prevents double-ack
+ * issues when both manual-ack consumers and the supervisor call acknowledge.
+ *
  * @property record The Kafka consumer record
  * @property acknowledge Function to call after successful processing to commit offset
  */
-data class AckableRecord<K, V>(
+class AckableRecord<K, V>(
   val record: ConsumerRecord<K, V>,
-  val acknowledge: () -> Unit
-)
+  private val acknowledgeCallback: () -> Unit
+) {
+  private val acknowledged = AtomicBoolean(false)
+
+  fun acknowledge() {
+    if (acknowledged.compareAndSet(false, true)) {
+      acknowledgeCallback()
+    }
+  }
+}
 
 /**
  * Commit strategy for auto-ack consumers.

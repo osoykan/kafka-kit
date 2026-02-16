@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.*
 import org.springframework.kafka.core.KafkaTemplate
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Interface for consumer supervisors.
@@ -90,14 +91,20 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
     log.info { "Starting consumer for [${topicConfig.displayName}] with processing concurrency: $concurrency" }
 
     return scope.launch {
-      flowConsumer
-        .consume(topicConfig)
-        .catch { e ->
-          log.error(e) { "Stream error on topics: [${topicConfig.displayName}]" }
+      consumeWithRestart(
+        flowProvider = {
+          flowConsumer
+            .consume(topicConfig)
+            .flatMapMerge(concurrency) { ackRecord ->
+              flow { emit(processRecord(ackRecord, ackRecord.record.topic())) }
+            }
+        },
+        restartDelay = 5.seconds,
+        onError = { e ->
+          log.error(e) { "Stream error on topics: [${topicConfig.displayName}], restarting..." }
           metrics.recordProcessingFailure(topicConfig.displayName, consumerName, e)
-        }.flatMapMerge(concurrency) { ackRecord ->
-          flow { emit(processRecord(ackRecord, ackRecord.record.topic())) }
-        }.collect()
+        }
+      ) {}
     }
   }
 
@@ -108,8 +115,14 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
     val result = handleRecord(ackRecord)
     val duration = (System.nanoTime() - startTime).nanoseconds
 
-    // Acknowledge after processing (triggers OrderedCommitter commit)
-    ackRecord.acknowledge()
+    // Only acknowledge if processing didn't fail completely.
+    // ProcessingResult.Failed means the record couldn't be processed AND couldn't
+    // be sent to retry/DLT — acknowledging would lose it forever.
+    // AckableRecord.acknowledge() is idempotent, so if the ManualAck consumer
+    // already acknowledged, this is a no-op.
+    if (result !is ProcessingResult.Failed) {
+      ackRecord.acknowledge()
+    }
 
     logResult(result, topic, duration)
   }
@@ -191,5 +204,37 @@ class ConsumerManualAckSupervisor<K : Any, V : Any>(
   override suspend fun handleRecord(ackRecord: AckableRecord<K, V>): ProcessingResult<*> {
     val ack = Acknowledgment { ackRecord.acknowledge() }
     return retryProcessor.process(ackRecord.record) { rec -> consumer.consume(rec, ack) }
+  }
+}
+
+/**
+ * Consumes a flow with automatic restart on errors.
+ *
+ * When the flow throws an exception (e.g., Kafka broker disconnect),
+ * waits [restartDelay] then calls [flowProvider] again to get a fresh flow.
+ * Respects coroutine cancellation — stops retrying when the scope is cancelled.
+ *
+ * @param flowProvider Factory that creates a new flow on each attempt
+ * @param restartDelay Delay between restarts
+ * @param onError Called when an error occurs (for logging/metrics)
+ * @param collector Called for each emitted element
+ */
+internal suspend fun <T> consumeWithRestart(
+  flowProvider: () -> Flow<T>,
+  restartDelay: Duration = 5.seconds,
+  onError: (Throwable) -> Unit = {},
+  collector: suspend (T) -> Unit
+) {
+  while (currentCoroutineContext().isActive) {
+    try {
+      flowProvider().collect { collector(it) }
+      // Flow completed normally — restart (container might have stopped)
+      return
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      onError(e)
+      delay(restartDelay)
+    }
   }
 }

@@ -21,6 +21,29 @@ dependencies {
   testImplementation(libs.spring.kafka.test)
 }
 
+sourceSets {
+  create("testIntegration") {
+    compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+    runtimeClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+  }
+}
+
+configurations["testIntegrationImplementation"].extendsFrom(configurations.testImplementation.get())
+configurations["testIntegrationRuntimeOnly"].extendsFrom(configurations.testRuntimeOnly.get())
+
+tasks.register<Test>("testIntegration") {
+  description = "Runs integration tests"
+  group = "verification"
+  testClassesDirs = sourceSets["testIntegration"].output.classesDirs
+  classpath = sourceSets["testIntegration"].runtimeClasspath
+  useJUnitPlatform()
+  shouldRunAfter(tasks.test)
+}
+
+tasks.check {
+  dependsOn(tasks.named("testIntegration"))
+}
+
 mavenPublishing {
   coordinates("io.github.osoykan", "kafka-flow", version.toString())
 

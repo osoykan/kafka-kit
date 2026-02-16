@@ -26,6 +26,12 @@ internal typealias OnRecordEmitFailed = (Exception) -> Unit
 internal typealias OnRecordAcknowledged = () -> Unit
 
 /**
+ * Callback invoked when a record is received from Kafka (before processing).
+ * Used to register offsets with the OrderedCommitter.
+ */
+internal typealias OnRecordDispatched = (partition: Int, offset: Long) -> Unit
+
+/**
  * Factory for creating Spring Kafka [AcknowledgingMessageListener] instances
  * that integrate with the ordered commit system.
  *
@@ -49,9 +55,15 @@ internal object AcknowledgingListenerFactory {
     sendToFlow: (AckableRecord<K, V>) -> Result<Unit>,
     onRecordEmitted: OnRecordEmitted = {},
     onRecordAcknowledged: OnRecordAcknowledged = {},
-    onRecordEmitFailed: OnRecordEmitFailed = {}
+    onRecordEmitFailed: OnRecordEmitFailed = {},
+    onRecordDispatched: OnRecordDispatched = { _, _ -> }
   ): AcknowledgingMessageListener<K, V> = AcknowledgingMessageListener { record, ack ->
     if (ack != null) {
+      // Register offset with the committer BEFORE processing. Since Kafka delivers
+      // records in order within a partition, the first call per partition establishes
+      // the correct starting offset for contiguous commit detection.
+      onRecordDispatched(record.partition(), record.offset())
+
       val ackableRecord = createAckableRecord(record, ack, commitChannel, onRecordAcknowledged)
       sendToFlow(ackableRecord)
         .onSuccess { onRecordEmitted() }
@@ -74,7 +86,7 @@ internal object AcknowledgingListenerFactory {
     onRecordAcknowledged: OnRecordAcknowledged
   ): AckableRecord<K, V> = AckableRecord(
     record = record,
-    acknowledge = {
+    acknowledgeCallback = {
       // Signal processing complete for backpressure
       onRecordAcknowledged()
 

@@ -10,6 +10,7 @@ import kotlinx.coroutines.selects.whileSelect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.TreeSet
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
@@ -87,11 +88,44 @@ internal class CommitBatch {
   private val mutex = Mutex()
 
   /**
+   * Tracks the minimum registered offset per partition.
+   * Set by [registerOffset] when records are dispatched from the listener (in order).
+   * Thread-safe: called from the listener thread, read under mutex in [addCompletion].
+   */
+  private val registeredMinOffsets = ConcurrentHashMap<Int, Long>()
+
+  /**
+   * Registers an offset for a partition as dispatched for processing.
+   *
+   * Called from the Kafka listener thread when a record is received (before processing).
+   * Since Kafka delivers records in order within a partition, the first call per partition
+   * establishes the correct starting offset. This allows [findHighestContiguous] to
+   * correctly handle consumers resuming from non-zero offsets.
+   *
+   * Thread-safe: uses ConcurrentHashMap.merge.
+   */
+  fun registerOffset(partition: Int, offset: Long) {
+    registeredMinOffsets.merge(partition, offset) { existing, new -> minOf(existing, new) }
+  }
+
+  /**
    * Records a completion event.
    * @return CompletionAddResult with count, gap status, and partition
    */
   suspend fun addCompletion(event: CompletionEvent): CompletionAddResult = mutex.withLock {
-    val state = partitions.getOrPut(event.partition) { PartitionState() }
+    val state = partitions.getOrPut(event.partition) {
+      // Initialize lastCommitted from registered min offset if available,
+      // otherwise fall back to the completion event offset.
+      // This handles consumers resuming from non-zero offsets.
+      val registeredMin = registeredMinOffsets[event.partition]
+      val initialLastCommitted = if (registeredMin != null) {
+        registeredMin - 1
+      } else {
+        event.offset - 1
+      }
+      PartitionState(lastCommitted = initialLastCommitted)
+    }
+
     state.completed.add(event.offset)
     state.pendingAcks[event.offset] = event.acknowledge
     val currentCount = count.incrementAndGet()
@@ -224,6 +258,7 @@ internal class CommitBatch {
     partitions.remove(partition)?.let { state ->
       count.addAndGet(-state.pendingAcks.size)
     }
+    registeredMinOffsets.remove(partition)
   }
 
   /**
@@ -232,6 +267,7 @@ internal class CommitBatch {
   suspend fun reset(): Unit = mutex.withLock {
     partitions.clear()
     count.set(0)
+    registeredMinOffsets.clear()
   }
 }
 
@@ -274,12 +310,25 @@ class OrderedCommitter(
   private val onGapClosed: () -> Unit = {}
 ) {
   private val batch = CommitBatch()
-  private val batchSignal = Channel<Unit>(Channel.RENDEZVOUS)
+  private var batchSignal = Channel<Unit>(Channel.RENDEZVOUS)
   private var commitManagerJob: Job? = null
-  private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+  private var scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
   @Volatile
   private var gapActive = false
+
+  /**
+   * Registers an offset as dispatched for processing.
+   *
+   * Must be called from the listener for every record BEFORE it enters the processing flow.
+   * Since Kafka delivers records in order, the first call per partition establishes
+   * the correct starting offset for contiguous commit detection.
+   *
+   * Thread-safe: can be called from any thread.
+   */
+  fun registerOffset(partition: Int, offset: Long) {
+    batch.registerOffset(partition, offset)
+  }
 
   /**
    * Called when a record processing completes.
@@ -353,6 +402,12 @@ class OrderedCommitter(
   fun start() {
     if (commitManagerJob != null) return
 
+    // Recreate scope and signal channel if they were cancelled by stop()
+    if (!scope.isActive) {
+      scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+      batchSignal = Channel(Channel.RENDEZVOUS)
+    }
+
     commitManagerJob = scope.launch {
       when (commitStrategy) {
         is CommitStrategy.BySize -> {
@@ -394,12 +449,13 @@ class OrderedCommitter(
   }
 
   /**
-   * Stops the commit manager.
+   * Stops the commit manager and cancels the scope.
    */
   fun stop() {
     commitManagerJob?.cancel()
     commitManagerJob = null
     batchSignal.close()
+    scope.cancel()
   }
 
   /**

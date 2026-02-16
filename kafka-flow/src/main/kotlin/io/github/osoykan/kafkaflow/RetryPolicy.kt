@@ -614,10 +614,13 @@ class RetryableProcessor<K : Any, V : Any>(
     retryResult: InMemoryRetryResult<*>,
     totalRetries: Int
   ): ProducerRecord<K, V> = ProducerRecord<K, V>(dltTopic, record.key(), record.value()).apply {
-    // Copy all headers
-    record.headers().forEach { headers().add(it) }
+    // Copy non-internal headers only (filter x- and kafka. prefixes to avoid duplicates)
+    record
+      .headers()
+      .filter { !it.key().startsWith("x-") && !it.key().startsWith("kafka.") }
+      .forEach { headers().add(it) }
 
-    // Add/update DLT metadata
+    // Add DLT metadata (fresh internal headers)
     headers().add(RecordHeader(Headers.ORIGINAL_TOPIC, originalTopic.toByteArray()))
     headers().add(RecordHeader(Headers.LAST_FAILURE_TIME, System.currentTimeMillis().toString().toByteArray()))
 

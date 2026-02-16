@@ -4,6 +4,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.poller.BackpressureController
 import io.github.osoykan.kafkaflow.poller.ContainerConfiguration
 import io.github.osoykan.kafkaflow.poller.ContainerRef
+import io.github.osoykan.kafkaflow.poller.PauseController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -86,8 +87,13 @@ abstract class AbstractBatchConsumerSupervisor<K : Any, V : Any>(
     // because acknowledge() needs the consumer thread to commit offsets.
     val batchChannel = Channel<BatchEnvelope<K, V>>(capacity = Channel.UNLIMITED)
 
+    val pauseController = PauseController(
+      pause = { runCatching { containerRef.get().pause() } },
+      resume = { runCatching { containerRef.get().resume() } },
+      topicName = topicConfig.displayName
+    )
     val backpressure = BackpressureController(
-      containerProvider = { containerRef.get() },
+      pauseController = pauseController,
       config = listenerConfig.backpressure,
       bufferCapacity = BATCH_CHANNEL_CAPACITY,
       topicName = topicConfig.displayName

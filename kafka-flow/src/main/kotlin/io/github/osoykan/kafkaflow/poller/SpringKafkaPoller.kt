@@ -82,7 +82,12 @@ class SpringKafkaPoller<K : Any, V : Any>(
   ): Flow<AckableRecord<K, V>> {
     // Create container reference early so committer can pause/resume on gap detection
     val containerRef = ContainerRef<K, V>()
-    val committerContext = createCommitterContext(topic, containerRef)
+    val pauseController = PauseController(
+      pause = { runCatching { containerRef.get().pause() }.onFailure { e -> logger.warn(e) { "Failed to pause container" } } },
+      resume = { runCatching { containerRef.get().resume() }.onFailure { e -> logger.warn(e) { "Failed to resume container" } } },
+      topicName = topic.displayName
+    )
+    val committerContext = createCommitterContext(topic, containerRef, pauseController)
     committers[topic.displayName] = committerContext
 
     return callbackFlow {
@@ -92,7 +97,14 @@ class SpringKafkaPoller<K : Any, V : Any>(
       }
 
       val committerJob = launch { committerContext.process() }
-      val containerContext = createAndStartContainer(topic, bufferCapacity, committerContext.channel, containerRef)
+      val containerContext = createAndStartContainer(
+        topic,
+        bufferCapacity,
+        committerContext.channel,
+        containerRef,
+        committerContext.committer,
+        pauseController
+      )
 
       logStartup(topic, containerContext.container)
 
@@ -114,16 +126,18 @@ class SpringKafkaPoller<K : Any, V : Any>(
     topic: TopicConfig,
     bufferCapacity: Int,
     commitChannel: Channel<CompletionEvent>,
-    containerRef: ContainerRef<K, V>
+    containerRef: ContainerRef<K, V>,
+    orderedCommitter: OrderedCommitter,
+    pauseController: PauseController
   ): ContainerContext<K, V> {
     val backpressure = BackpressureController(
-      containerProvider = { containerRef.get() },
+      pauseController = pauseController,
       config = listenerConfig.backpressure,
       bufferCapacity = bufferCapacity,
       topicName = topic.displayName
     )
 
-    val listener = createListener(commitChannel, backpressure)
+    val listener = createListener(commitChannel, backpressure, orderedCommitter)
     val containerProps = ContainerConfiguration.createContainerProperties(topic, listenerConfig).apply {
       setMessageListener(listener)
     }
@@ -138,7 +152,8 @@ class SpringKafkaPoller<K : Any, V : Any>(
 
   private fun ProducerScope<AckableRecord<K, V>>.createListener(
     commitChannel: Channel<CompletionEvent>,
-    backpressure: BackpressureController
+    backpressure: BackpressureController,
+    orderedCommitter: OrderedCommitter
   ): AcknowledgingMessageListener<K, V> = AcknowledgingListenerFactory.create(
     commitChannel = commitChannel,
     sendToFlow = { record ->
@@ -151,7 +166,8 @@ class SpringKafkaPoller<K : Any, V : Any>(
       }
     },
     onRecordEmitted = { backpressure.onBufferAdd() },
-    onRecordAcknowledged = { backpressure.onBufferConsume() }
+    onRecordAcknowledged = { backpressure.onBufferConsume() },
+    onRecordDispatched = { partition, offset -> orderedCommitter.registerOffset(partition, offset) }
   )
 
   // endregion
@@ -170,7 +186,11 @@ class SpringKafkaPoller<K : Any, V : Any>(
     }
   }
 
-  private fun createCommitterContext(topic: TopicConfig, containerRef: ContainerRef<K, V>): CommitterContext {
+  private fun createCommitterContext(
+    topic: TopicConfig,
+    containerRef: ContainerRef<K, V>,
+    pauseController: PauseController
+  ): CommitterContext {
     val effectiveCommitStrategy = topic.effectiveCommitStrategy(listenerConfig.commitStrategy)
     val orderedCommitter = OrderedCommitter(
       commitStrategy = effectiveCommitStrategy,
@@ -178,13 +198,11 @@ class SpringKafkaPoller<K : Any, V : Any>(
         logger.debug { "OrderedCommitter[$effectiveCommitStrategy]: Committed partition $partition up to offset $offset" }
       },
       onGapDetected = {
-        logger.info { "OrderedCommitter[${topic.displayName}]: Gap detected, pausing container" }
-        runCatching { containerRef.get().pause() }
+        runCatching { pauseController.requestPause(PauseReason.GAP_DETECTED) }
           .onFailure { e -> logger.warn(e) { "Failed to pause container on gap detection" } }
       },
       onGapClosed = {
-        logger.info { "OrderedCommitter[${topic.displayName}]: Gap closed, resuming container" }
-        runCatching { containerRef.get().resume() }
+        runCatching { pauseController.clearPause(PauseReason.GAP_DETECTED) }
           .onFailure { e -> logger.warn(e) { "Failed to resume container on gap closure" } }
       }
     )
