@@ -85,6 +85,8 @@ class CreateExampleTopicsMigration : KafkaMigration {
  */
 class StoveConfig : AbstractProjectConfig() {
   companion object {
+    private val appPort = PortFinder.findAvailablePort()
+
     init {
       stoveKafkaBridgePortDefault = PortFinder.findAvailablePortAsString()
       System.setProperty(STOVE_KAFKA_BRIDGE_PORT, stoveKafkaBridgePortDefault)
@@ -97,7 +99,7 @@ class StoveConfig : AbstractProjectConfig() {
     .with {
       httpClient {
         HttpClientSystemOptions(
-          baseUrl = "http://localhost:8080"
+          baseUrl = "http://localhost:$appPort"
         )
       }
       bridge()
@@ -126,7 +128,7 @@ class StoveConfig : AbstractProjectConfig() {
       }
       ktor(
         withParameters = listOf(
-          "port=8080"
+          "port=$appPort"
         ),
         runner = { parameters ->
           run(parameters) {
