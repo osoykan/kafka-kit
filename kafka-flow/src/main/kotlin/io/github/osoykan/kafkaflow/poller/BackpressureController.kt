@@ -3,9 +3,9 @@ package io.github.osoykan.kafkaflow.poller
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.BackpressureConfig
 import kotlinx.coroutines.channels.Channel
-import kotlin.math.max
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.max
 
 private val logger = KotlinLogging.logger {}
 
