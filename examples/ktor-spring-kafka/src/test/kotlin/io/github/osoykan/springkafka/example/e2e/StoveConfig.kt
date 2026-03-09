@@ -128,7 +128,7 @@ class StoveConfig : AbstractProjectConfig() {
       }
       ktor(
         withParameters = listOf(
-          "port=$appPort"
+          "server.port=$appPort"
         ),
         runner = { parameters ->
           run(parameters) {
