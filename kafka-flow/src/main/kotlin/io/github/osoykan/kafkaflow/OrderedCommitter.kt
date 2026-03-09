@@ -216,26 +216,33 @@ internal class CommitBatch {
   }
 
   /**
-   * Force commits the highest pending offset per partition (even with gaps).
-   * Use during shutdown to prevent stuck records.
+   * Flushes any safely committable offsets per partition.
+   * Leaves gaps pending so shutdown does not commit past unfinished work.
    */
   suspend fun flush(): CommitResult = mutex.withLock {
     val flushed = mutableMapOf<Int, Long>()
 
     partitions.forEach { (partition, state) ->
-      if (state.pendingAcks.isNotEmpty()) {
-        val maxOffset = state.pendingAcks.keys.max()
-        state.pendingAcks[maxOffset]?.invoke()
-        state.pendingAcks.clear()
-        state.completed.clear()
-        state.lastCommitted = maxOffset
-        flushed[partition] = maxOffset
-        logger.warn { "Partition $partition: flushed up to $maxOffset (may have gaps!)" }
+      val highestContiguous = findHighestContiguous(state)
+
+      if (highestContiguous >= 0 && highestContiguous > state.lastCommitted) {
+        val highestAck = state.pendingAcks[highestContiguous]
+
+        for (offset in (state.lastCommitted + 1)..highestContiguous) {
+          state.pendingAcks.remove(offset)
+          state.completed.remove(offset)
+          count.decrementAndGet()
+        }
+
+        highestAck?.invoke()
+        state.lastCommitted = highestContiguous
+        flushed[partition] = highestContiguous
+
+        logger.debug { "Partition $partition: flushed safely up to offset $highestContiguous" }
       }
     }
 
-    count.set(0)
-    CommitResult(flushed, hasRemainingGaps = false)
+    CommitResult(flushed, hasRemainingGaps = partitions.values.any { hasGapForPartition(it) })
   }
 
   /**
@@ -475,8 +482,8 @@ class OrderedCommitter(
   }
 
   /**
-   * Forces commit of all pending completions (highest contiguous per partition).
-   * Use this during shutdown.
+   * Flushes any safely committable completions.
+   * Use this during shutdown without committing across gaps.
    */
   suspend fun flush() {
     val result = batch.flush()

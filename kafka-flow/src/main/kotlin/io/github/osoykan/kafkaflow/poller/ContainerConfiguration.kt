@@ -24,6 +24,7 @@ internal object ContainerConfiguration {
   ): ContainerProperties =
     ContainerProperties(*topicConfig.topics.toTypedArray()).apply {
       pollTimeout = topicConfig.effectivePollTimeout(listenerConfig.pollTimeout).inWholeMilliseconds
+      topicConfig.groupId?.let { setGroupId(it) }
       ackMode = ContainerProperties.AckMode.MANUAL_IMMEDIATE
       idleBetweenPolls = listenerConfig.idleBetweenPolls.inWholeMilliseconds
       isSyncCommits = true

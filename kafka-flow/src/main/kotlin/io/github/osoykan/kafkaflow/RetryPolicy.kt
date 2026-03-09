@@ -339,7 +339,9 @@ class RetryableProcessor<K : Any, V : Any>(
   private val policy: RetryPolicy = RetryPolicy.DEFAULT,
   private val classifier: ExceptionClassifier = AlwaysRetryClassifier,
   private val metrics: KafkaFlowMetrics = NoOpMetrics,
-  private val consumerName: String = ""
+  private val consumerName: String = "",
+  private val retryTopicResolver: (originalTopic: String) -> String = { it + policy.retryTopicSuffix },
+  private val dltTopicResolver: (originalTopic: String) -> String = { it + policy.dltSuffix }
 ) {
   /**
    * Processes a record with full retry support.
@@ -479,7 +481,7 @@ class RetryableProcessor<K : Any, V : Any>(
       ?.let { String(it) }
       ?: record.topic()
 
-    val retryTopic = originalTopic + policy.retryTopicSuffix
+    val retryTopic = retryTopicResolver(originalTopic)
     val newAttempt = currentAttempt + 1
 
     try {
@@ -509,7 +511,7 @@ class RetryableProcessor<K : Any, V : Any>(
       ?.let { String(it) }
       ?: record.topic().removeSuffix(policy.retryTopicSuffix)
 
-    val dltTopic = originalTopic + policy.dltSuffix
+    val dltTopic = dltTopicResolver(originalTopic)
     val retryTopicAttempt = getRetryTopicAttempt(record)
     val totalRetries = retryResult.inMemoryRetryCount + (retryTopicAttempt * policy.maxInMemoryRetries)
 
@@ -538,7 +540,7 @@ class RetryableProcessor<K : Any, V : Any>(
       ?.let { String(it) }
       ?: record.topic().removeSuffix(policy.retryTopicSuffix)
 
-    val dltTopic = originalTopic + policy.dltSuffix
+    val dltTopic = dltTopicResolver(originalTopic)
     val retryTopicAttempt = getRetryTopicAttempt(record)
     val inMemoryCount = getInMemoryRetryCount(record)
     val totalRetries = inMemoryCount + (retryTopicAttempt * policy.maxInMemoryRetries)

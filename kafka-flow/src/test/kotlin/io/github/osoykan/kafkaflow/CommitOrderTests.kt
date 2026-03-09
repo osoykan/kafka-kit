@@ -118,7 +118,25 @@ class CommitOrderTests :
       stats.pendingOffsets shouldContainAll listOf(2L, 4L, 5L)
     }
 
-    test("OrderedCommitter flush commits highest pending even with gaps") {
+    test("OrderedCommitter flush should not commit across gaps") {
+      val committer = OrderedCommitter(commitStrategy = CommitStrategy.BySize(100))
+      val ackCalls = CopyOnWriteArrayList<Long>()
+
+      committer.registerOffset(0, 0L)
+      committer.registerOffset(0, 1L)
+      committer.registerOffset(0, 2L)
+
+      committer.onComplete(CompletionEvent(0, 2L) { ackCalls.add(2L) })
+      committer.flush()
+
+      ackCalls shouldContainExactly emptyList()
+
+      val stats = committer.getStats()[0]!!
+      stats.lastCommitted shouldBe -1L
+      stats.pendingOffsets shouldContainExactly listOf(2L)
+    }
+
+    test("OrderedCommitter flush commits only the highest contiguous offset") {
       val committer = OrderedCommitter(commitStrategy = CommitStrategy.BySize(100)) // Large batch
       val ackCalls = CopyOnWriteArrayList<Long>()
 
@@ -128,16 +146,16 @@ class CommitOrderTests :
 
       ackCalls shouldHaveSize 0 // Nothing committed yet
 
-      // Flush commits the highest pending offset
-      // (Kafka semantics: committing 4 means "processed up to 4")
+      // Without registered offsets, the first completion establishes offset 2 as the start.
+      // Flush should only advance through the known contiguous range and leave the gap at 3 pending.
       committer.flush()
 
       ackCalls shouldHaveSize 1
-      ackCalls shouldContainExactly listOf(4L)
+      ackCalls shouldContainExactly listOf(2L)
 
       val stats = committer.getStats()[0]!!
-      stats.lastCommitted shouldBe 4L
-      stats.pendingCount shouldBe 0
+      stats.lastCommitted shouldBe 2L
+      stats.pendingCount shouldBe 1
     }
 
     test("OrderedCommitter reset clears all state") {
@@ -295,9 +313,9 @@ class CommitOrderTests :
       stats.lastCommitted shouldBe -1L // Nothing committed yet (batch size not reached)
       stats.pendingCount shouldBe 2
 
-      // Flush should commit highest
+      // Flush should only commit the contiguous prefix.
       committer.flush()
-      ackCalls shouldContainExactly listOf(1000L)
+      ackCalls shouldContainExactly listOf(0L)
     }
 
     test("Duplicate completion for same offset is handled") {
@@ -454,7 +472,7 @@ class CommitOrderTests :
       val stats = committer.getStats()[0]!!
       stats.pendingCount shouldBe 100
 
-      // Flush should commit highest
+      // Flush should commit the highest contiguous offset.
       committer.flush()
       completionCount.get() shouldBe 1 // Only highest offset ack'd
     }

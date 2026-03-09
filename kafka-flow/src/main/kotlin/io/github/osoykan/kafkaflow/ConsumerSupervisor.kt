@@ -66,7 +66,9 @@ abstract class AbstractConsumerSupervisor<K : Any, V : Any>(
     policy = config.retry,
     classifier = config.classifier,
     metrics = metrics,
-    consumerName = consumerName
+    consumerName = consumerName,
+    retryTopicResolver = { config.retryTopic },
+    dltTopicResolver = { config.dltTopic }
   )
 
   override val topics: List<String>

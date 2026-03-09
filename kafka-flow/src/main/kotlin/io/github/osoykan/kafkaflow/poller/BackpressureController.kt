@@ -2,7 +2,8 @@ package io.github.osoykan.kafkaflow.poller
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.github.osoykan.kafkaflow.BackpressureConfig
-import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
+import kotlinx.coroutines.channels.Channel
+import kotlin.math.max
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -28,9 +29,10 @@ internal class BackpressureController(
 ) {
   private val bufferCount = AtomicInteger(0)
   private val paused = AtomicBoolean(false)
+  private val effectiveBufferCapacity = bufferCapacity.normalizeBufferCapacity()
 
-  private val pauseThresholdCount = (bufferCapacity * config.pauseThreshold).toInt()
-  private val resumeThresholdCount = (bufferCapacity * config.resumeThreshold).toInt()
+  private val pauseThresholdCount = max(1, (effectiveBufferCapacity * config.pauseThreshold).toInt())
+  private val resumeThresholdCount = max(0, (effectiveBufferCapacity * config.resumeThreshold).toInt())
 
   /**
    * Called when a record is added to the buffer.
@@ -42,7 +44,7 @@ internal class BackpressureController(
     val count = bufferCount.incrementAndGet()
     if (count >= pauseThresholdCount && paused.compareAndSet(false, true)) {
       pauseController.requestPause(PauseReason.BACKPRESSURE)
-      logger.info { "Backpressure: Requested pause for $topicName (buffer: $count/$bufferCapacity)" }
+      logger.info { "Backpressure: Requested pause for $topicName (buffer: $count/$effectiveBufferCapacity)" }
     }
   }
 
@@ -56,7 +58,15 @@ internal class BackpressureController(
     val count = bufferCount.decrementAndGet()
     if (count <= resumeThresholdCount && paused.compareAndSet(true, false)) {
       pauseController.clearPause(PauseReason.BACKPRESSURE)
-      logger.info { "Backpressure: Cleared pause for $topicName (buffer: $count/$bufferCapacity)" }
+      logger.info { "Backpressure: Cleared pause for $topicName (buffer: $count/$effectiveBufferCapacity)" }
     }
   }
 }
+
+private fun Int.normalizeBufferCapacity(): Int = when {
+  this == Channel.RENDEZVOUS -> 1
+  this <= 0 -> DEFAULT_BUFFERED_CHANNEL_CAPACITY
+  else -> this
+}
+
+private const val DEFAULT_BUFFERED_CHANNEL_CAPACITY = 64
