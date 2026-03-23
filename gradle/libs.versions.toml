@@ -9,10 +9,10 @@ testcontainers = "2.0.3"
 ktor = "3.4.1"
 koin = "4.1.1"
 hoplite = "2.9.0"
-spotless = "8.3.0"
+spotless = "8.4.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
-stove = "1.0.0.510-SNAPSHOT"
+stove = "1.0.0.514-SNAPSHOT"
 jackson3 = "3.1.0"
 
 [libraries]
