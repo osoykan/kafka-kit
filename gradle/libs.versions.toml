@@ -1,7 +1,7 @@
 [versions]
 kotlin = "2.3.21"
 spring-kafka = "4.0.4"
-kotlinx-coroutines = "1.10.2"
+kotlinx-coroutines = "1.11.0"
 kotlin-logging = "8.0.02"
 logback = "1.5.32"
 kotest = "6.1.11"
