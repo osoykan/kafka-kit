@@ -4,15 +4,15 @@ spring-kafka = "4.0.5"
 kotlinx-coroutines = "1.11.0"
 kotlin-logging = "8.0.4"
 logback = "1.5.37"
-kotest = "6.1.11"
+kotest = "6.2.1"
 testcontainers = "2.0.5"
 ktor = "3.5.1"
 koin = "4.2.1"
 hoplite = "2.9.0"
-spotless = "8.6.0"
+spotless = "8.7.0"
 ktlint = "1.8.0"
 testlogger = "4.0.0"
-stove = "1.0.0.533-SNAPSHOT"
+stove = "1.0.0.537-SNAPSHOT"
 jackson3 = "3.2.0"
 
 [libraries]
@@ -63,6 +63,6 @@ stove-bom = { module = "com.trendyol:stove-bom", version.ref = "stove" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.36.0" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.37.0" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 testlogger = { id = "com.adarshr.test-logger", version.ref = "testlogger" }
