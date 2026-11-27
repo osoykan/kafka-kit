@@ -13,7 +13,7 @@ include(
 )
 
 plugins {
-  id("dev.aga.gradle.version-catalog-generator") version ("4.2.2")
+  id("dev.aga.gradle.version-catalog-generator") version ("4.2.3")
 }
 dependencyResolutionManagement {
   repositories {
